@@ -7,7 +7,7 @@
     ret
 .endm
 .text
-SYSCALL exit,    SYS_exit
+SYSCALL _exit,   SYS_exit
 SYSCALL fork,    SYS_fork
 SYSCALL write,   SYS_write
 SYSCALL getpid,  SYS_getpid
@@ -33,6 +33,13 @@ SYSCALL kill,    SYS_kill
 SYSCALL setpgid, SYS_setpgid
 SYSCALL tcsetpgrp, SYS_tcsetpgrp
 SYSCALL ttymode, SYS_ttymode
+SYSCALL sigaction, SYS_sigaction
+
+// Signal handlers return here (lr); sp points at the kernel's sigframe.
+.global __sigtramp
+__sigtramp:
+    mov     x8, #SYS_sigreturn
+    svc     #0
 SYSCALL getprocs, SYS_getprocs
 SYSCALL brk,     SYS_brk
 SYSCALL nanosleep, SYS_nanosleep

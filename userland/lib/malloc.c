@@ -1,4 +1,9 @@
 // K&R-style first-fit allocator with coalescing, heap grown via brk().
+// Small blocks (<= SMALL units) are recycled through per-size free lists in
+// O(1) instead: K&R free() walks the address-ordered list, which goes
+// quadratic when a program frees many interleaved small blocks (Lua's GC).
+// shortcut: small blocks never return to the coalescing arena, so memory used
+// by one size class is not reusable by another.
 #include "ulib.h"
 
 typedef union header {
@@ -10,6 +15,9 @@ typedef union header {
 } header;
 
 static header base, *freep;
+
+#define SMALL 33                // units, header included: requests up to 512 bytes
+static header *small[SMALL + 1];
 
 void *sbrk(long inc)
 {
@@ -23,11 +31,24 @@ void *sbrk(long inc)
     return old;
 }
 
+static void arena_free(header *b);
+
 void free(void *p)
 {
     if (!p)
         return;
-    header *b = (header *)p - 1, *q;
+    header *b = (header *)p - 1;
+    if (b->s.units <= SMALL) {
+        b->s.next = small[b->s.units];
+        small[b->s.units] = b;
+        return;
+    }
+    arena_free(b);
+}
+
+static void arena_free(header *b)
+{
+    header *q;
     for (q = freep; !(b > q && b < q->s.next); q = q->s.next)
         if (q >= q->s.next && (b > q || b < q->s.next))
             break;              // at either end of the arena
@@ -55,7 +76,7 @@ static header *morecore(size_t units)
         return NULL;
     header *h = (header *)p;
     h->s.units = units;
-    free(h + 1);
+    arena_free(h);
     return freep;
 }
 
@@ -64,6 +85,11 @@ void *malloc(size_t n)
     if (n == 0 || n > (1UL << 30))
         return NULL;
     size_t units = (n + sizeof(header) - 1) / sizeof(header) + 1;
+    if (units <= SMALL && small[units]) {
+        header *b = small[units];
+        small[units] = b->s.next;
+        return b + 1;
+    }
     if (!freep) {
         base.s.next = freep = &base;
         base.s.units = 0;

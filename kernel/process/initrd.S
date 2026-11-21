@@ -37,5 +37,6 @@ initrd_table:
     FILE /bin, uptime
     FILE /bin, ed
     FILE /bin, edit
+    FILE /bin, lua
     .section .rodata.initrd_table
     .quad 0, 0, 0

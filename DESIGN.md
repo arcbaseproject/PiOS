@@ -76,7 +76,7 @@
   each page crossing.
 - **Process entry**: kernel enters `_start` with x0=argc, x1=argv, x2=envp,
   sp = 16-byte aligned pointer to argv array; strings in the top stack page.
-  Stack is 16 KiB at 0xBFFFC000, fixed size, NX.
+  Stack is 256 KiB at 0xBFFC0000, fixed size, mapped eagerly, NX.
 - **ELF**: static ET_EXEC AArch64 only; PT_LOAD segments mapped with RO/NX
   from p_flags; D-cache cleaned to PoU and I-cache invalidated after load and
   after fork copies.
@@ -200,4 +200,35 @@
   program that dies cannot leave the console unusable.
 - **edit**: full-screen editor; assumes an 80x24 VT100 terminal and repaints
   the whole screen per key (~2 KB, ~170 ms at 115200 baud on real serial).
-- **Syscalls added**: brk(27) nanosleep(28) clock_gettime(29) ttymode(30).
+- **Signals**: per-task handler table (SIG_DFL, SIG_IGN, or address), pending
+  and blocked bitmasks. Ignored signals are dropped at send time; default
+  ones set `killed` (exit at the next return to EL0) as before. Caught
+  signals are delivered on every return to EL0: the kernel pushes a sigframe
+  (FP/SIMD state, trap frame, old mask) on the user stack, blocks the signal,
+  and enters the handler with x0 = sig and lr = the restorer libc passed to
+  sigaction (`__sigtramp`, which calls sigreturn). sigreturn restores the
+  frame but keeps only NZCV from the saved SPSR, so a forged frame cannot
+  leave EL0t or mask IRQs. A caught signal makes blocking syscalls return
+  -EINTR (no SA_RESTART). Faults (SIGSEGV/SIGILL) and SIGKILL are not
+  catchable; init cannot be signalled. exec resets handlers, keeps ignores.
+- **HDMI console**: framebuffer 640x480x32 from mailbox tags 0x48003-0x48006,
+  0x40001, 0x40008. It lives in VideoCore RAM, which mmu_map_nc maps as
+  Normal non-cacheable (MAIR attr2 = 0x44) so the GPU sees writes without
+  cache maintenance. uart_putc feeds every byte to fbcon, so kernel and user
+  output appear on both; input is still serial only. Font: 8x16 rasterized
+  from DejaVu Sans Mono by tools/mkfont.py. Scrolling copies the screen.
+- **C library for ports** (userland/libc, linked as an archive): stdio
+  (buffered FILE over fds, stdout line-buffered and flushed by exit() via
+  `__exit_hook`), strtod/strtol, string/ctype extras, "C" locale only,
+  setjmp/longjmp (x19-x30, sp, d8-d15), libm with series kernels (a few ulp,
+  not correctly rounded), time.h counting from boot as the epoch (no RTC).
+  printf gained %f %e %g %o and + space # flags; float digits come from
+  double-precision scaling, so digits past ~15 significant ones may be off.
+- **malloc**: requests up to 512 bytes are recycled through per-size free
+  lists (O(1)); larger ones use the K&R coalescing arena. Without this,
+  Lua's GC freeing many interleaved small blocks took quadratic time.
+- **Lua**: upstream 5.4.7 sources unmodified in userland/lua, built with
+  LUA_USE_C89 (Lua parses hex floats itself; no %a, no popen, no dlopen).
+  User stacks are 256 KiB so Lua's C recursion limit (200 levels) fits.
+- **Syscalls added**: brk(27) nanosleep(28) clock_gettime(29) ttymode(30)
+  sigaction(31) sigreturn(32).

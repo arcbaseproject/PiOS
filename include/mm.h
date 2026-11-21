@@ -7,7 +7,7 @@
  * kernel identity map in L1[0] and device block in L1[1]. */
 #define USER_BASE        0x80000000UL
 #define USER_TOP         0xC0000000UL
-#define USER_STACK_PAGES 4
+#define USER_STACK_PAGES 64    // 256 KiB, mapped eagerly (Lua's parser and VM recurse deeply)
 #define USER_STACK_TOP   USER_TOP
 #define USER_STACK_BASE  (USER_STACK_TOP - USER_STACK_PAGES * PAGE_SIZE)
 
@@ -18,6 +18,7 @@
 extern uint64_t kernel_l1[512];
 
 void mmu_init(uint64_t ram_end);
+void mmu_map_nc(uint64_t pa, uint64_t size);    // VideoCore RAM, e.g. framebuffer
 void page_init(uintptr_t start, uintptr_t end);
 void *page_alloc(void);
 void page_free(void *p);

@@ -3,7 +3,10 @@
 #include "uapi.h"
 
 /* Raw syscalls: return -errno on failure (no errno variable yet). */
-_Noreturn void exit(int code);
+_Noreturn void exit(int code);    /* runs __exit_hook (stdio flush), then _exit */
+_Noreturn void _exit(int code);
+extern void (*__exit_hook)(void);
+extern char **environ;
 int fork(void);
 long write(int fd, const void *buf, size_t len);
 int getpid(void);
@@ -29,6 +32,9 @@ int kill(int pid, int sig);
 int setpgid(int pid, int pgid);
 int tcsetpgrp(int pgid);
 int ttymode(int mode);
+long sigaction(int sig, void *handler, void *restorer);   /* raw; use signal() */
+typedef void (*sighandler_t)(int);
+sighandler_t signal(int sig, sighandler_t h);   /* h may be (sighandler_t)SIG_DFL / SIG_IGN; returns old or (sighandler_t)-errno */
 int getprocs(struct procinfo *buf, int max);
 long brk(void *addr);           /* raw: returns the new (or unchanged) break */
 int nanosleep(const struct timespec *req, struct timespec *rem);   /* rem unused */
@@ -42,6 +48,7 @@ void *memmove(void *d, const void *s, size_t n);
 int memcmp(const void *a, const void *b, size_t n);
 int strncmp(const char *a, const char *b, size_t n);
 char *strchr(const char *s, int c);
+void *memchr(const void *s, int c, size_t n);
 long atol(const char *s);
 
 void *sbrk(long inc);           /* (void *)-1 on failure */

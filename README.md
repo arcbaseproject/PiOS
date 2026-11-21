@@ -32,6 +32,9 @@ Leave adapter VCC unconnected; power the Pi via USB. Then:
 
     picocom -b 115200 /dev/ttyUSB0
 
+Output also appears on HDMI (640x480 text console). Typing still goes through
+the serial adapter: there is no USB keyboard support.
+
 Expected (QEMU shown; real Pi reports ~448-500 MiB RAM and 19200000 Hz timer):
 
     PiOS 0.6
@@ -53,8 +56,8 @@ Expected (QEMU shown; real Pi reports ~448-500 MiB RAM and 19200000 Hz timer):
     [init] starting /bin/sh (^D or exit to restart it)
     / $
 
-Commands: ls pwd cat echo mkdir rm cp mv ps kill uname clear sleep uptime ed edit,
-builtins cd exit. Programs copied to /boot/bin run by name.
+Commands: ls pwd cat echo mkdir rm cp mv ps kill uname clear sleep uptime ed edit lua,
+builtins cd exit. `lua` runs Lua 5.4 scripts or an interactive prompt. The shell prompt supports arrow-key editing and up/down history. Programs copied to /boot/bin run by name.
 The card's boot partition is at /boot and changes persist. New file names
 there must be 8.3 (`notes.txt` ok, `my-notes.txt` not); existing long names
 read fine. Keep a backup of the boot files: this FAT driver is new.
@@ -66,3 +69,10 @@ QEMU with a disk image: `qemu-system-aarch64 -M raspi3b -kernel kernel8.img
 
 No output: check TX/RX swap, `config.txt` present, firmware files present.
 Green ACT LED flashing a pattern then nothing = firmware could not find a file.
+
+## Third-party code
+
+- `userland/lua`: Lua 5.4.7, Copyright (C) 1994-2024 Lua.org, PUC-Rio, MIT
+  license (full text at the end of `userland/lua/lua.h`).
+- `drivers/fb/font.c`: bitmap rendering of DejaVu Sans Mono, Bitstream Vera
+  license (notice in the file).

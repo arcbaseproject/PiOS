@@ -1,4 +1,5 @@
 # Cross build with clang + host multi-target GNU binutils (Void: clang, binutils).
+.DEFAULT_GOAL := all
 CC      := clang --target=aarch64-none-elf
 LD      := ld -m aarch64elf
 OBJCOPY := objcopy
@@ -15,17 +16,32 @@ SRCS := arch/aarch64/boot/start.S arch/aarch64/exception/vectors.S \
         kernel/process/proc.c kernel/process/elf.c mm/kmalloc.c \
         fs/vfs/vfs.c fs/vfs/sysfile.c fs/vfs/pipe.c fs/ramfs/ramfs.c fs/devfs/devfs.c \
         kernel/process/initrd.S kernel/syscall/syscall.c \
-        drivers/sd/emmc.c fs/fat/fat32.c
+        drivers/sd/emmc.c fs/fat/fat32.c drivers/fb/fbcon.c drivers/fb/font.c
 OBJS := $(patsubst %,build/%.o,$(SRCS))
 
 # Userland: static ELFs linked at USER_BASE, embedded via kernel/process/initrd.S.
 UTESTS := hello segv spin fpu
 UBINS  := sh ls pwd cat echo mkdir rm cp mv ps kill uname clear sleep uptime ed edit
-UPROGS := init $(UTESTS) $(UBINS)
+UPROGS := init $(UTESTS) $(UBINS) lua
 ULIB   := build/userland/lib/crt0.S.o build/userland/lib/syscall.S.o build/userland/lib/ulib.c.o \
           build/userland/lib/malloc.c.o build/userland/lib/printf.c.o
 UELFS  := $(patsubst %,build/user/%.elf,$(UPROGS))
-build/userland/%: CFLAGS := $(subst -mgeneral-regs-only ,,$(subst -Iinclude ,,$(CFLAGS))) -Iuserland/lib
+UCFLAGS := $(subst -mgeneral-regs-only ,,$(subst -Iinclude ,,$(CFLAGS))) -Iuserland/lib
+build/userland/%: CFLAGS := $(UCFLAGS)
+
+# Standard C library subset for ported programs (an archive: programs pull only what they use).
+LIBC_OBJS := $(patsubst %,build/%.o,$(wildcard userland/libc/*.c userland/libc/*.S))
+LIBC      := build/userland/libc.a
+build/userland/libc/%: CFLAGS := $(UCFLAGS) -nostdlibinc -Iuserland/libc/include
+build/userland/libc/%: ASFLAGS += -Iuserland/libc/include
+$(LIBC): $(LIBC_OBJS)
+	rm -f $@
+	ar rcs $@ $^
+
+# Lua 5.4.7, unmodified upstream sources (userland/lua, MIT license in lua.h).
+LUA_OBJS := $(patsubst %,build/%.o,$(wildcard userland/lua/*.c))
+build/userland/lua/%: CFLAGS := $(filter-out -Werror -Iuserland/lib,$(UCFLAGS)) \
+                                -nostdlibinc -Iuserland/libc/include -DLUA_USE_C89
 build/userland/%: ASFLAGS := -mcpu=cortex-a53 -Iinclude/uapi -MMD -MP
 
 all: kernel8.img
@@ -33,9 +49,10 @@ all: kernel8.img
 build/user/init.elf: build/userland/init/init.c.o
 $(UTESTS:%=build/user/%.elf): build/user/%.elf: build/userland/tests/%.c.o
 $(UBINS:%=build/user/%.elf): build/user/%.elf: build/userland/bin/%.c.o
+build/user/lua.elf: $(LUA_OBJS) $(LIBC)
 $(UELFS): $(ULIB) userland/user.ld
 	@mkdir -p $(dir $@)
-	$(LD) -nostdlib -z max-page-size=4096 -T userland/user.ld -o $@ $(filter %.o,$^)
+	$(LD) -nostdlib -S -z max-page-size=4096 -T userland/user.ld -o $@ $(filter %.o,$^) $(filter %.a,$^)
 
 build/kernel/process/initrd.S.o: $(UELFS)
 
@@ -60,5 +77,6 @@ qemu: kernel8.img
 clean:
 	rm -rf build kernel8.img
 
--include $(OBJS:.o=.d) $(ULIB:.o=.d) $(UTESTS:%=build/userland/tests/%.c.d) $(UBINS:%=build/userland/bin/%.c.d) build/userland/init/init.c.d
+-include $(OBJS:.o=.d) $(ULIB:.o=.d) $(UTESTS:%=build/userland/tests/%.c.d) $(UBINS:%=build/userland/bin/%.c.d) build/userland/init/init.c.d \
+         $(LIBC_OBJS:.o=.d) $(LUA_OBJS:.o=.d)
 .PHONY: all qemu clean

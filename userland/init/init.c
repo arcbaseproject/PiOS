@@ -93,6 +93,21 @@ static void libc_tests(void)
     snprintf(buf, sizeof buf, "%d|%5s|%-3c|%04x|%lu|%.2s|%%", -42, "ab", 'z', 0xbe, 123456789012UL, "xyz");
     check("snprintf formats", strcmp(buf, "-42|   ab|z  |00be|123456789012|xy|%") == 0);
     check("snprintf truncates, returns full length", snprintf(buf, 4, "abcdef") == 6 && strcmp(buf, "abc") == 0);
+    snprintf(buf, sizeof buf, "%.3f|%g|%e|%g|%.14g|%5.1f", 3.14159, 0.0001, 12345.678, 1e20, 0.1, -2.25);
+    check("snprintf floats", strcmp(buf, "3.142|0.0001|1.234568e+04|1e+20|0.1| -2.2") == 0 ||
+                             strcmp(buf, "3.142|0.0001|1.234568e+04|1e+20|0.1| -2.3") == 0);
+
+    // Lua: interpreter, float formatting, strtod, libm, stdio, error handling.
+    char *lua[] = { "/bin/lua", "-e",
+        "assert(2^10 == 1024 and 7 // 2 == 3 and 3 % -2 == -1)"
+        "assert(tostring(1/3) == '0.33333333333333' and tostring(1e100) == '1e+100')"
+        "assert(tonumber('3.25') == 3.25 and tonumber('0x10') == 16)"
+        "assert(math.abs(math.sin(1) - 0.8414709848079) < 1e-12 and math.log(8, 2) == 3)"
+        "local f = assert(io.open('/tmp/l.txt', 'w')) f:write('a\\nb\\n') f:close()"
+        "local n = 0 for _ in io.lines('/tmp/l.txt') do n = n + 1 end assert(n == 2)"
+        "assert(not pcall(error, 'x')) os.remove('/tmp/l.txt') os.exit(5)", 0 };
+    int lst = 0, lpid = run(lua);
+    check("lua -e script passes its asserts", waitpid(lpid, &lst, 0) == lpid && lst == W_EXITCODE(5));
 
     long b0 = brk(0);
     char *p[64];
@@ -126,6 +141,60 @@ static void libc_tests(void)
     clock_gettime(CLOCK_MONOTONIC, &t1);
     long ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
     check("nanosleep(50 ms) sleeps 50-100 ms", sr == 0 && ms >= 50 && ms < 100);
+}
+
+static volatile int got, hits;
+
+static void on_usr1(int sig)
+{
+    got = sig;
+    if (++hits == 1)
+        kill(getpid(), SIGUSR1);        // blocked while this handler runs: delivered after it
+    __asm__ volatile("movi v16.16b, #0" ::: "v16");     // clobber FP; sigreturn must restore it
+}
+
+static void signal_tests(void)
+{
+    check("signal(SIGKILL) refused", (long)signal(SIGKILL, on_usr1) == -EINVAL);
+    int pid = fork(), st = 0;
+    if (pid == 0) {                     // init itself cannot be signalled
+        signal(SIGUSR1, on_usr1);
+        uint64_t lo;
+        register long x0 __asm__("x0") = getpid();
+        register long x1 __asm__("x1") = SIGUSR1;
+        register long x8 __asm__("x8") = SYS_kill;
+        __asm__ volatile("movi v16.2d, #0xff\n svc #0\n fmov %1, d16"
+                         : "+r"(x0), "=r"(lo) : "r"(x1), "r"(x8) : "v16", "memory");
+        exit((got == SIGUSR1 && x0 == 0) | (hits == 2) << 1 | (lo == 0xff) << 2);
+    }
+    waitpid(pid, &st, 0);
+    st >>= 8;
+    check("handler runs, kill() result intact", st & 1);
+    check("same signal deferred until handler returns", st & 2);
+    check("FP registers restored after handler", st & 4);
+
+    pid = fork();
+    if (pid == 0) {
+        signal(SIGUSR1, on_usr1);
+        struct timespec d = { 5, 0 };
+        int r = nanosleep(&d, 0);
+        exit(got == SIGUSR1 && r == -EINTR ? 0 : 1);
+    }
+    struct timespec d = { 0, 50000000 };
+    nanosleep(&d, 0);
+    kill(pid, SIGUSR1);
+    check("caught signal interrupts nanosleep with -EINTR", waitpid(pid, &st, 0) == pid && st == 0);
+
+    signal(SIGTERM, (sighandler_t)SIG_IGN);
+    pid = fork();
+    if (pid == 0) {
+        struct timespec d = { 0, 100000000 };
+        nanosleep(&d, 0);
+        exit(7);
+    }
+    signal(SIGTERM, (sighandler_t)SIG_DFL);
+    kill(pid, SIGTERM);
+    check("SIG_IGN inherited across fork; SIGTERM ignored", waitpid(pid, &st, 0) == pid && st == W_EXITCODE(7));
 }
 
 static void fs_tests(void)
@@ -235,6 +304,7 @@ int main(void)
     puts("\n");
     process_tests();
     libc_tests();
+    signal_tests();
     fs_tests();
     puts(failures ? "[init] SOME TESTS FAILED\n" : "[init] all tests passed\n");
 

@@ -62,6 +62,14 @@ int strncmp(const char *a, const char *b, size_t n)
     return 0;
 }
 
+void *memchr(const void *s, int c, size_t n)
+{
+    for (const unsigned char *p = s; n--; p++)
+        if (*p == (unsigned char)c)
+            return (void *)p;
+    return NULL;
+}
+
 char *strchr(const char *s, int c)
 {
     for (;; s++) {
@@ -143,4 +151,21 @@ void err(const char *who, const char *what, long e)
         write(2, buf + i, sizeof buf - (size_t)i);
     }
     eputs("\n");
+}
+
+extern char __sigtramp[];
+
+sighandler_t signal(int sig, sighandler_t h)
+{
+    return (sighandler_t)sigaction(sig, (void *)h, __sigtramp);
+}
+
+void (*__exit_hook)(void);
+char **environ;
+
+_Noreturn void exit(int code)
+{
+    if (__exit_hook)
+        __exit_hook();
+    _exit(code);
 }

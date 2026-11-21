@@ -2,5 +2,7 @@
 .section .text.start
 .global _start
 _start:
+    adrp    x9, environ
+    str     x2, [x9, :lo12:environ]
     bl      main
     bl      exit
