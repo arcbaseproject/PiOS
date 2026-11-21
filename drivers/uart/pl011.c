@@ -1,6 +1,7 @@
 // PL011 UART0 on GPIO14 (TXD) / GPIO15 (RXD), 115200 8N1.
 // Requires config.txt: dtoverlay=disable-bt (frees PL011 from Bluetooth)
 // and init_uart_clock=48000000 (fixes UARTCLK the divisor below assumes).
+#include "fbcon.h"
 #include "mmio.h"
 #include "uart.h"
 #include "vfs.h"
@@ -60,6 +61,7 @@ void uart_putc(char c)
     while (mmio_read(UART_FR) & FR_TXFF)
         ;
     mmio_write(UART_DR, (uint32_t)c);
+    fbcon_putc(c);
 }
 
 void uart_puts(const char *s)

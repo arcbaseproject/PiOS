@@ -1,3 +1,4 @@
+#include "fbcon.h"
 #include "exception.h"
 #include "kernel.h"
 #include "mailbox.h"
@@ -51,6 +52,7 @@ void kernel_main(void)
 
     mmu_init(msize);
     kprintf("[MEM] MMU on: identity map, caches enabled\n");
+    fbcon_init();
 
     page_init((uintptr_t)__stack_top, msize);
     page_selftest();
