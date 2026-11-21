@@ -1,0 +1,7 @@
+# Bare-metal PiOS boot config for Raspberry Pi Zero 2 W
+arm_64bit=1
+kernel=kernel8.img
+# Put PL011 (UART0) on GPIO14/15 instead of Bluetooth, fixed 48 MHz clock
+dtoverlay=disable-bt
+init_uart_clock=48000000
+enable_uart=1
