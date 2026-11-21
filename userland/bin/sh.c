@@ -1,4 +1,5 @@
-// Minimal shell: pipelines, < > >> redirection, '' "" quoting, cd/exit builtins.
+// Minimal shell: pipelines, < > >> redirection, '' "" \ quoting, cd/exit builtins.
+// On the console: line editing (arrows, Home/End, Delete) and up/down history.
 // Commands without '/' are run from /bin, then /boot/bin (SD card). Each
 // pipeline gets its own process group and owns the console's ^C while it runs.
 #include "ulib.h"
@@ -45,12 +46,17 @@ static int tokenize(char **toks, int max)
             while (*s && !is_space(*s) && *s != '|' && *s != '<' && *s != '>') {
                 if (*s == '\'' || *s == '"') {
                     char q = *s++;
-                    while (*s && *s != q)
+                    while (*s && *s != q) {
+                        if (q == '"' && *s == '\\' && (s[1] == '"' || s[1] == '\\'))
+                            s++;        // \" and \\ inside double quotes
                         *w++ = *s++;
+                    }
                     if (!*s)
                         return -1;  // unterminated quote
                     s++;
                 } else {
+                    if (*s == '\\' && s[1])
+                        s++;            // backslash quotes the next character
                     *w++ = *s++;
                 }
             }
@@ -190,18 +196,120 @@ static void run(int n, char **envp)
     ttymode(TTY_COOKED);    // in case a raw-mode program died without restoring it
 }
 
+#define HIST 16
+static char hist[HIST][sizeof line];
+static int nhist;           // total lines ever added; slot = index % HIST
+
+static void outn(const char *s, long n)
+{
+    if (n > 0)
+        write(1, s, (size_t)n);
+}
+
+static void left(long n)
+{
+    char b[16];
+    if (n > 0)
+        outn(b, snprintf(b, sizeof b, "\033[%ldD", n));
+}
+
+// Replace the edited text (cursor at pos) with s.
+static void replace(const char *s, long *len, long *pos)
+{
+    left(*pos);
+    *len = *pos = (long)strlen(s);
+    memcpy(line, s, (size_t)*len);
+    outn(line, *len);
+    outn("\033[K", 3);
+}
+
+// Read one line into `line` with raw-mode editing. Returns length, -1 at EOF.
+static long edit_line(void)
+{
+    long len = 0, pos = 0;
+    int h = nhist;          // history cursor; nhist = the line being typed
+    char saved[sizeof line] = "";
+    ttymode(TTY_RAW);
+    for (;;) {
+        char c, s[3];
+        if (read(0, &c, 1) != 1) {
+            len = -1;
+            break;
+        }
+        if (c == '\r' || c == '\n') {
+            outn("\n", 1);
+            break;
+        }
+        if (c == 3) {               // ^C: drop the line
+            outn("^C\n", 3);
+            len = 0;
+            break;
+        }
+        if (c == 4 && len == 0) {   // ^D on an empty line: EOF
+            len = -1;
+            break;
+        }
+        int k = c;
+        if (c == 033) {
+            if (read(0, s, 1) != 1 || read(0, s + 1, 1) != 1)
+                continue;
+            k = s[1] == '3' ? (read(0, s, 1), 0x104) : 0x100 + s[1];
+        }
+        if (k == 0x100 + 'D' && pos > 0) {
+            left(1), pos--;
+        } else if (k == 0x100 + 'C' && pos < len) {
+            outn(line + pos, 1), pos++;
+        } else if (k == 0x100 + 'H' || k == 1) {
+            left(pos), pos = 0;
+        } else if (k == 0x100 + 'F' || k == 5) {
+            outn(line + pos, len - pos), pos = len;
+        } else if ((k == 0x100 + 'A' && h > 0 && h > nhist - HIST) || (k == 0x100 + 'B' && h < nhist)) {
+            if (h == nhist) {
+                memcpy(saved, line, (size_t)len);
+                saved[len] = 0;
+            }
+            h += k == 0x100 + 'A' ? -1 : 1;
+            replace(h == nhist ? saved : hist[h % HIST], &len, &pos);
+        } else if ((k == 0x7f || k == '\b' || k == 0x104) && (k == 0x104 ? pos < len : pos > 0)) {
+            if (k != 0x104)
+                left(1), pos--;
+            memmove(line + pos, line + pos + 1, (size_t)(len - pos - 1));
+            len--;
+            outn(line + pos, len - pos);
+            outn(" ", 1);
+            left(len - pos + 1);
+        } else if (k >= 0x20 && k < 0x7f && len < (long)sizeof line - 1) {
+            memmove(line + pos + 1, line + pos, (size_t)(len - pos));
+            line[pos] = (char)k;
+            len++;
+            outn(line + pos, len - pos);
+            pos++;
+            left(len - pos);
+        }
+    }
+    ttymode(TTY_COOKED);
+    if (len > 0) {
+        line[len] = 0;
+        if (!nhist || strcmp(hist[(nhist - 1) % HIST], line) != 0)
+            memcpy(hist[nhist++ % HIST], line, (size_t)len + 1);
+    }
+    return len;
+}
+
 int main(int argc, char **argv, char **envp)
 {
     (void)argc, (void)argv;
+    struct stat st;
+    int console = fstat(0, &st) == 0 && (st.st_mode & S_IFMT) == S_IFCHR;
     for (;;) {
         char cwd[PATH_MAX];
         if (getcwd(cwd, sizeof cwd) < 0)
             cwd[0] = '?', cwd[1] = 0;
         puts(cwd);
         puts(" $ ");
-        // shortcut: assumes one read() = one line (true for the console); a pipe/file stdin needs buffering.
-        long len = read(0, line, sizeof line - 1);
-        if (len <= 0) {
+        // shortcut: non-console stdin assumes one read() = one line; a pipe/file stdin needs buffering.
+        long len = console ? edit_line() : read(0, line, sizeof line - 1);
+        if (len < 0 || (len == 0 && !console)) {     // console blank line / ^C = 0, not EOF
             puts("\n");
             return 0;
         }
