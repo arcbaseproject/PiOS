@@ -5,6 +5,7 @@
 #include "mm.h"
 #include "proc.h"
 #include "sched.h"
+#include "uapi.h"
 
 extern void cpu_switch(struct cpu_context *prev, struct cpu_context *next);
 extern void task_entry(void);
@@ -119,6 +120,8 @@ void schedule(void)
         current = next;
         if (next->pgd != prev->pgd)
             vm_activate(next->pgd);
+        fpsimd_save(&prev->fp);
+        fpsimd_load(&next->fp);
         cpu_switch(&prev->ctx, &next->ctx);
         schedule_tail();
     }
@@ -126,12 +129,16 @@ void schedule(void)
 }
 
 // Block until wakeup(chan). Call with IRQs masked; recheck the condition after.
-void sleep_on(void *chan)
+// Returns -EINTR without sleeping, or on wake, if a fatal signal is pending.
+int sleep_on(void *chan)
 {
+    if (current->killed)
+        return -EINTR;
     current->wchan = chan;
     current->state = TASK_WAITING;
     schedule();
     current->wchan = NULL;
+    return current->killed ? -EINTR : 0;
 }
 
 void wakeup(void *chan)

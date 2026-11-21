@@ -1,4 +1,4 @@
-// Phase 5 init: process + filesystem self-tests, then a console echo loop.
+// init: process + filesystem self-tests, then keeps /bin/sh running on the console and reaps orphans.
 #include "ulib.h"
 
 static int failures;
@@ -52,6 +52,80 @@ static void process_tests(void)
     while (waitpid(-1, &st, 0) > 0)
         reaped++;
     check("two concurrent children reaped", reaped == 2);
+
+    char *fa[] = { "/bin/fpu", "a", 0 }, *fb[] = { "/bin/fpu", "b", 0 };
+    int f1 = run(fa), f2 = run(fb), s1 = -1, s2 = -1;
+    waitpid(f1, &s1, 0);
+    waitpid(f2, &s2, 0);
+    check("FP state kept per process across preemption", s1 == 0 && s2 == 0);
+
+    pid = run(a);
+    check("kill() running child", kill(pid, SIGTERM) == 0);
+    check("killed child status is SIGTERM", waitpid(pid, &st, 0) == pid && (st & 0x7f) == SIGTERM);
+    check("kill() missing pid -> -ESRCH", kill(9999, SIGTERM) == -ESRCH);
+    check("kill() init -> -EPERM", kill(1, SIGKILL) == -EPERM);
+
+    // Child blocked in read() on an empty pipe is woken and killed.
+    int p[2];
+    pipe(p);
+    pid = fork();
+    if (pid == 0) {
+        char c;
+        close(p[1]);
+        read(p[0], &c, 1);
+        exit(0);
+    }
+    close(p[0]);
+    struct procinfo pi[64];
+    int np = getprocs(pi, 64), seen = 0;
+    for (int i = 0; i < np; i++)
+        seen |= pi[i].pid == pid && pi[i].pgid == 1;
+    check("getprocs() lists child with inherited pgid", seen);
+    check("setpgid(child, 0) puts it in its own group", setpgid(pid, 0) == 0);
+    kill(pid, SIGKILL);
+    check("blocked child killed with SIGKILL", waitpid(pid, &st, 0) == pid && (st & 0x7f) == SIGKILL);
+    close(p[1]);
+}
+
+static void libc_tests(void)
+{
+    char buf[64];
+    snprintf(buf, sizeof buf, "%d|%5s|%-3c|%04x|%lu|%.2s|%%", -42, "ab", 'z', 0xbe, 123456789012UL, "xyz");
+    check("snprintf formats", strcmp(buf, "-42|   ab|z  |00be|123456789012|xy|%") == 0);
+    check("snprintf truncates, returns full length", snprintf(buf, 4, "abcdef") == 6 && strcmp(buf, "abc") == 0);
+
+    long b0 = brk(0);
+    char *p[64];
+    int ok = 1;
+    for (int i = 0; i < 64; i++) {
+        p[i] = malloc((size_t)(i + 1) * 100);
+        ok &= p[i] && ((unsigned long)p[i] & 15) == 0;
+        if (p[i])
+            memset(p[i], i, (size_t)(i + 1) * 100);
+    }
+    for (int i = 0; i < 64 && ok; i++)
+        ok &= p[i][0] == i && p[i][(i + 1) * 100 - 1] == i;
+    check("malloc: 64 aligned blocks, contents intact", ok);
+    check("heap grew via brk", brk(0) > b0);
+    for (int i = 0; i < 64; i += 2)
+        free(p[i]);
+    char *r = realloc(p[1], 100000);
+    check("realloc keeps data", r && r[0] == 1 && r[199] == 1);
+    for (int i = 3; i < 64; i += 2)
+        free(p[i]);
+    free(r);
+    long b1 = brk(0);
+    void *big = malloc(200000);
+    free(big);
+    check("freed memory is reused (coalesced)", big && brk(0) == b1);
+    check("brk below heap start fails", brk((void *)0x1000) == b1);
+
+    struct timespec t0, t1, d = { 0, 50000000 };
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    int sr = nanosleep(&d, 0);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    long ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+    check("nanosleep(50 ms) sleeps 50-100 ms", sr == 0 && ms >= 50 && ms < 100);
 }
 
 static void fs_tests(void)
@@ -160,16 +234,17 @@ int main(void)
     putnum(getpid());
     puts("\n");
     process_tests();
+    libc_tests();
     fs_tests();
     puts(failures ? "[init] SOME TESTS FAILED\n" : "[init] all tests passed\n");
 
-    puts("[init] console echo: type lines, ^D to finish\n");
-    char line[128];
-    long n;
-    while (puts("> "), (n = read(0, line, sizeof line)) > 0) {
-        puts("[init] got: ");
-        write(1, line, (size_t)n);
+    char *sh[] = { "/bin/sh", 0 };
+    for (;;) {
+        puts("[init] starting /bin/sh (^D or exit to restart it)\n");
+        int shpid = run(sh), st;
+        if (shpid < 0)
+            return 1;
+        while (waitpid(-1, &st, 0) != shpid)   // also reaps reparented orphans
+            ;
     }
-    puts("[init] EOF, exiting\n");
-    return failures;
 }

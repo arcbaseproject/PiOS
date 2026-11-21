@@ -51,12 +51,32 @@
 - [ ] Verified on real Pi Zero 2 W
 - [ ] Moved to Phase 7: SD card driver, ext2, mount table
 
-## Phase 6 - Unix environment (next)
-Minimal libc (stdio-ish printf, string, malloc via brk/sbrk), shell (fork/exec,
-PATH, redirection `< > >>`, pipelines, cd/exit builtins, env vars), coreutils:
-ls cd pwd cat echo mkdir rm cp mv ps kill uname clear. Needs: brk/sbrk, kill +
-basic signals, a process listing interface for ps, uname syscall.
+## Phase 6 - Unix environment
+- [x] kill (every signal terminates), process groups, ^C kills the foreground group
+- [x] getprocs syscall for ps
+- [x] sh: pipelines, `< > >>`, quoting, /bin lookup, cd/exit builtins; init respawns it
+- [x] coreutils: ls pwd cat echo mkdir rm cp mv ps kill uname clear
+- [x] init test suite: 50/50 pass in QEMU raspi3b; shell session verified with piped serial input
+- [ ] Verified on real Pi Zero 2 W
+- [ ] Deferred until a program needs them: brk/malloc, printf, env var expansion,
+      signal handlers, background jobs (`&`), `cp` into a directory, `rm -r`
 
-## Phase 3-7
-Multitasking, EL0 userspace + syscalls + ELF, VFS/ramfs/devfs, libc/init/sh/coreutils,
-ext2/SMP/USB/network. Details added when each phase starts.
+## Phase 7 - Storage (in progress)
+- [x] SD card driver: EMMC controller via GPIO 48-53 ALT3, polled PIO
+- [x] FAT32 read/write on partition 1, attached at /boot; long names read, 8.3 names created
+- [x] Verified in QEMU raspi3b: persistence across reboot, exec from /boot, delete frees clusters, fsck.fat clean
+- [ ] Verified on real Pi Zero 2 W  <- highest risk: EMMC init timing on real silicon
+- [ ] Deferred: long-name creation, 4-bit bus / multi-block I/O, timestamps (no RTC),
+      mount syscall, ext2, cross-filesystem mv
+
+## Phase 8 - Userland foundations
+- [x] Programs in /boot/bin run by name (install = copy to the card)
+- [x] FP/SIMD registers saved per process; userland built without -mgeneral-regs-only
+- [x] brk syscall; libc malloc/free/calloc/realloc, printf/snprintf/dprintf, more string functions
+- [x] nanosleep, clock_gettime(CLOCK_MONOTONIC); sleep, uptime
+- [x] ed: line editor
+- [x] Raw console mode (ttymode syscall); edit: full-screen editor (arrows, ^S save, ^Q quit)
+- [x] init test suite: 59/59 pass in QEMU raspi3b
+- [ ] Verified on real Pi Zero 2 W
+- Next candidates: shell line editing/history, signal handlers, COW fork,
+  RTC-less wall clock (set by user), SMP, USB, network.

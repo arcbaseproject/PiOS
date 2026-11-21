@@ -23,6 +23,8 @@ from_el2:
     mov     x1, #3                  // CNTHCTL_EL2.EL1PCTEN|EL1PCEN: EL1 may use physical timer
     msr     cnthctl_el2, x1
     msr     cntvoff_el2, xzr
+    mov     x1, #0x33ff             // CPTR_EL2: RES1 bits, TFP=0: don't trap FP/SIMD to EL2
+    msr     cptr_el2, x1
     ldr     x1, =0x30d00800         // SCTLR_EL1: RES1 bits only, MMU and caches off
     msr     sctlr_el1, x1
     mov     x1, #0x3c5              // SPSR: EL1h, DAIF masked
@@ -32,6 +34,9 @@ from_el2:
     eret
 
 el1_entry:
+    mov     x1, #(3 << 20)          // CPACR_EL1.FPEN: FP/SIMD usable at EL0/EL1 (kernel C never uses it)
+    msr     cpacr_el1, x1
+    isb
     ldr     x1, =__stack_top
     mov     sp, x1
 

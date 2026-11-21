@@ -14,20 +14,25 @@ SRCS := arch/aarch64/boot/start.S arch/aarch64/exception/vectors.S \
         arch/aarch64/cpu/switch.S kernel/sched/sched.c mm/vm.c \
         kernel/process/proc.c kernel/process/elf.c mm/kmalloc.c \
         fs/vfs/vfs.c fs/vfs/sysfile.c fs/vfs/pipe.c fs/ramfs/ramfs.c fs/devfs/devfs.c \
-        kernel/process/initrd.S kernel/syscall/syscall.c
+        kernel/process/initrd.S kernel/syscall/syscall.c \
+        drivers/sd/emmc.c fs/fat/fat32.c
 OBJS := $(patsubst %,build/%.o,$(SRCS))
 
 # Userland: static ELFs linked at USER_BASE, embedded via kernel/process/initrd.S.
-UPROGS := init hello segv spin
-ULIB   := build/userland/lib/crt0.S.o build/userland/lib/syscall.S.o build/userland/lib/ulib.c.o
+UTESTS := hello segv spin fpu
+UBINS  := sh ls pwd cat echo mkdir rm cp mv ps kill uname clear sleep uptime ed edit
+UPROGS := init $(UTESTS) $(UBINS)
+ULIB   := build/userland/lib/crt0.S.o build/userland/lib/syscall.S.o build/userland/lib/ulib.c.o \
+          build/userland/lib/malloc.c.o build/userland/lib/printf.c.o
 UELFS  := $(patsubst %,build/user/%.elf,$(UPROGS))
-build/userland/%: CFLAGS := $(subst -Iinclude ,,$(CFLAGS)) -Iuserland/lib
+build/userland/%: CFLAGS := $(subst -mgeneral-regs-only ,,$(subst -Iinclude ,,$(CFLAGS))) -Iuserland/lib
 build/userland/%: ASFLAGS := -mcpu=cortex-a53 -Iinclude/uapi -MMD -MP
 
 all: kernel8.img
 
 build/user/init.elf: build/userland/init/init.c.o
-$(filter-out build/user/init.elf,$(UELFS)): build/user/%.elf: build/userland/tests/%.c.o
+$(UTESTS:%=build/user/%.elf): build/user/%.elf: build/userland/tests/%.c.o
+$(UBINS:%=build/user/%.elf): build/user/%.elf: build/userland/bin/%.c.o
 $(UELFS): $(ULIB) userland/user.ld
 	@mkdir -p $(dir $@)
 	$(LD) -nostdlib -z max-page-size=4096 -T userland/user.ld -o $@ $(filter %.o,$^)
@@ -55,5 +60,5 @@ qemu: kernel8.img
 clean:
 	rm -rf build kernel8.img
 
--include $(OBJS:.o=.d) $(ULIB:.o=.d) $(UELFS:build/user/%.elf=build/userland/tests/%.c.d) build/userland/init/init.c.d
+-include $(OBJS:.o=.d) $(ULIB:.o=.d) $(UTESTS:%=build/userland/tests/%.c.d) $(UBINS:%=build/userland/bin/%.c.d) build/userland/init/init.c.d
 .PHONY: all qemu clean

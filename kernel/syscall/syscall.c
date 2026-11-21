@@ -5,6 +5,7 @@
 #include "proc.h"
 #include "sched.h"
 #include "uapi.h"
+#include "timer.h"
 #include "vfs.h"
 
 long syscall_dispatch(struct trap_frame *tf)
@@ -30,6 +31,14 @@ long syscall_dispatch(struct trap_frame *tf)
     case SYS_rmdir:   return sys_rmdir(a[0]);
     case SYS_rename:  return sys_rename(a[0], a[1]);
     case SYS_getdents: return sys_getdents((int)a[0], a[1], a[2]);
+    case SYS_kill:    return sys_kill((int)a[0], (int)a[1]);
+    case SYS_setpgid: return sys_setpgid((int)a[0], (int)a[1]);
+    case SYS_tcsetpgrp: return sys_tcsetpgrp((int)a[0]);
+    case SYS_getprocs: return sys_getprocs(a[0], (int)a[1]);
+    case SYS_brk:     return sys_brk(a[0]);
+    case SYS_nanosleep: return sys_nanosleep(a[0]);
+    case SYS_clock_gettime: return sys_clock_gettime((int)a[0], a[1]);
+    case SYS_ttymode: return sys_ttymode((int)a[0]);
     case SYS_getpid:  return current_task()->pid;
     case SYS_execve:  return sys_execve(tf, a[0], a[1], a[2]);
     case SYS_waitpid: return sys_waitpid((int)a[0], a[1], (int)a[2]);

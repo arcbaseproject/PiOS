@@ -133,3 +133,71 @@
   mkdir(18) unlink(19) rmdir(20) rename(21) getdents(22, fixed 64-byte
   `struct dirent` records, `.` and `..` synthesized).
 - **No permissions/uids**: mode bits stored, never enforced. Single user.
+
+## Phase 6
+
+- **Signals**: no handlers or masks. `kill(pid, sig)` sets `task->killed`;
+  the task exits with that signal status on its next return to EL0 (after a
+  syscall or an IRQ taken from EL0). A sleeping target is made runnable and
+  `sleep_on` returns -EINTR, so every blocking loop (pipe, console, waitpid)
+  bails out. Init and kernel threads cannot be killed.
+- **Process groups**: `pgid` inherited on fork; `setpgid` on self or own
+  child. `tcsetpgrp(pgid)` names the console's ^C target (0 = none, ^C just
+  discards the line). The shell gives each pipeline its own group, hands it the
+  console while waiting, then resets to 0 so ^C at the prompt cannot kill it.
+- **ps**: `getprocs(buf, max)` fills fixed `struct procinfo` records instead
+  of a /proc filesystem.
+- **uname**: no syscall; `PIOS_VERSION` in uapi.h is shared by kernel banner
+  and userland, which ship in one image.
+- **Shell**: one read() per line (console is cooked); commands without `/`
+  run from /bin. No heap anywhere in userland yet: static buffers only.
+- **Syscalls added**: kill(23) setpgid(24) tcsetpgrp(25) getprocs(26).
+
+## Phase 7
+
+- **SD**: firmware leaves the SD slot on SDHOST; `sd_init` switches GPIO 48-53
+  to ALT3, routing it to the Arasan EMMC (SDHCI v3) at 0x3F300000. That takes
+  EMMC from the Wi-Fi chip, which is unused. Base clock from mailbox (clock id
+  1); 400 kHz identification, then 25 MHz, 1-bit bus, single-block CMD17/24,
+  polled. Runs with IRQs masked like every syscall, so I/O stalls the system
+  (fine at this scale). No card = boot continues without /boot.
+- **Mailbox** now cleans/invalidates its buffer line around each call, so it
+  works after caches are on.
+- **Mounting**: no mount table. The FAT root inode is linked into the ramfs
+  root as `boot`, the same way /dev nodes are linked; path walk, `..` and
+  getcwd needed no changes. rename across filesystems returns -EXDEV.
+- **FAT32**: partition 1 of an MBR (type 0x0B/0x0C) or a partitionless volume.
+  512-byte sectors only. Write-through with one cached data sector and one
+  cached FAT sector; FAT updates go to every FAT copy. FSInfo free count is
+  set to "unknown" at mount rather than maintained. Inodes are cached per
+  directory-entry location and never evicted, so getcwd/readdir see stable
+  inode numbers. rename = new entry (link) then delete old (unlink); the inode
+  remembers its old location so unlink doesn't free the moved data.
+  Long names are read (up to NAME_MAX); new names must be 8.3, single case
+  (lowercase stored via the NT case flags, as Windows/Linux do). Gaps from
+  seeking past EOF are zero-filled. Dates fixed at 1980-01-01 (no RTC).
+
+## Phase 8
+
+- **FP/SIMD**: CPTR_EL2.TFP=0 and CPACR_EL1.FPEN=11 at boot. The kernel never
+  touches FP registers, so user state stays live in them across syscalls and
+  IRQs; `schedule()` saves prev's q0-q31/fpsr/fpcr into `task->fp` and loads
+  next's (eager, 528 bytes per switch). fork copies the live registers;
+  execve zeroes them.
+- **Heap**: `brk` grows from the page-rounded end of the highest PT_LOAD
+  segment up to one guard page below the stack. Pages are mapped (zeroed) as
+  the break rises; shrinking only moves the break. fork copies heap pages with
+  everything else.
+- **libc** (userland/lib): K&R first-fit malloc with coalescing over sbrk (16
+  KiB growth steps, 16-byte aligned blocks); printf family without floating
+  point, 1 KiB per printf call.
+- **Time**: tick-based nanosleep (10 ms resolution, never early, -EINTR on
+  kill); clock_gettime reads CNTPCT directly. No wall clock: the board has
+  no RTC.
+- **Raw console**: ttymode(TTY_RAW) makes the console pass every byte,
+  including ^C, straight to read() without echo or line buffering (like
+  cfmakeraw). The shell resets cooked mode after every pipeline, so a raw
+  program that dies cannot leave the console unusable.
+- **edit**: full-screen editor; assumes an 80x24 VT100 terminal and repaints
+  the whole screen per key (~2 KB, ~170 ms at 115200 baud on real serial).
+- **Syscalls added**: brk(27) nanosleep(28) clock_gettime(29) ttymode(30).

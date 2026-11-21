@@ -28,7 +28,7 @@ static void page_selftest(void)
 void kernel_main(void)
 {
     uart_init();
-    kprintf("\nPiOS 0.5\n"
+    kprintf("\nPiOS " PIOS_VERSION "\n"
             "Architecture: AArch64\n"
             "Platform: Raspberry Pi Zero 2 W\n\n"
             "[BOOT] Kernel entry successful\n"

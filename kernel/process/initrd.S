@@ -19,5 +19,23 @@ initrd_table:
     FILE /bin, hello
     FILE /bin, segv
     FILE /bin, spin
+    FILE /bin, fpu
+    FILE /bin, sh
+    FILE /bin, ls
+    FILE /bin, pwd
+    FILE /bin, cat
+    FILE /bin, echo
+    FILE /bin, mkdir
+    FILE /bin, rm
+    FILE /bin, cp
+    FILE /bin, mv
+    FILE /bin, ps
+    FILE /bin, kill
+    FILE /bin, uname
+    FILE /bin, clear
+    FILE /bin, sleep
+    FILE /bin, uptime
+    FILE /bin, ed
+    FILE /bin, edit
     .section .rodata.initrd_table
     .quad 0, 0, 0

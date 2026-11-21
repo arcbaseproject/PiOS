@@ -1,7 +1,7 @@
 # PiOS
 
 Original Unix-like OS for Raspberry Pi Zero 2 W (BCM2710A1, Cortex-A53, AArch64).
-Status: Phase 5. User processes, VFS + ramfs, file descriptors, pipes, /dev/console with line editing. See ROADMAP.md, DESIGN.md.
+Status: Phase 7 (in progress). SD card FAT32 boot partition at /boot (read/write). Shell with pipelines and redirection, coreutils, kill and ^C, user processes, VFS + ramfs, pipes, /dev/console. See ROADMAP.md, DESIGN.md.
 
 ## Build (Void Linux)
 
@@ -34,7 +34,7 @@ Leave adapter VCC unconnected; power the Pi via USB. Then:
 
 Expected (QEMU shown; real Pi reports ~448-500 MiB RAM and 19200000 Hz timer):
 
-    PiOS 0.5
+    PiOS 0.6
     ...
     [BOOT] Running at EL1
     [BOOT] Exception vectors installed
@@ -50,11 +50,19 @@ Expected (QEMU shown; real Pi reports ~448-500 MiB RAM and 19200000 Hz timer):
     [init] PASS getpid() == 1
     ...
     [init] all tests passed
-    [init] console echo: type lines, ^D to finish
-    >
+    [init] starting /bin/sh (^D or exit to restart it)
+    / $
 
-Type a line and press Enter: it is echoed back. ^D on an empty line ends init.
-    [KERNEL] init exited, status 0, free pages N (+1 kstack pending)
+Commands: ls pwd cat echo mkdir rm cp mv ps kill uname clear sleep uptime ed edit,
+builtins cd exit. Programs copied to /boot/bin run by name.
+The card's boot partition is at /boot and changes persist. New file names
+there must be 8.3 (`notes.txt` ok, `my-notes.txt` not); existing long names
+read fine. Keep a backup of the boot files: this FAT driver is new.
+
+QEMU with a disk image: `qemu-system-aarch64 -M raspi3b -kernel kernel8.img
+-serial stdio -display none -drive file=sd.img,if=sd,format=raw`
+(image size must be a power of two).
+`|`, `<`, `>`, `>>` and quotes work. ^C kills the running command.
 
 No output: check TX/RX swap, `config.txt` present, firmware files present.
 Green ACT LED flashing a pattern then nothing = firmware could not find a file.

@@ -75,8 +75,8 @@ static long exec_image(struct task *t, struct trap_frame *tf, const char *path,
         iput(ino);
         return ptr_va < USER_STACK_TOP - PAGE_SIZE ? -E2BIG : -ENOMEM;
     }
-    uint64_t entry;
-    err = elf_load(pgd, ino, &entry);
+    uint64_t entry, img_top;
+    err = elf_load(pgd, ino, &entry, &img_top);
     iput(ino);
     uint8_t *top = NULL;
     for (uint64_t va = USER_STACK_BASE; err == 0 && va < USER_STACK_TOP; va += PAGE_SIZE)
@@ -115,6 +115,10 @@ static long exec_image(struct task *t, struct trap_frame *tf, const char *path,
             base = c + 1;
     set_task_name(t, base);
 
+    t->brk_base = t->brk = t->brk_mapped = img_top;
+    memset(&t->fp, 0, sizeof t->fp);
+    if (t == current_task())
+        fpsimd_load(&t->fp);
     memset(tf, 0, sizeof *tf);
     tf->elr = entry;
     tf->spsr = 0;           // EL0t, interrupts unmasked
@@ -170,6 +174,7 @@ void proc_create_init(void)
     f->refs = 3;
     t->ctx.lr = (uintptr_t)ret_from_fork;
     t->ctx.sp = (uintptr_t)tf;
+    t->pgid = t->pid;
     t->state = TASK_RUNNABLE;
     init_task = t;
     kprintf("[PROC] init created, pid %d\n", t->pid);
@@ -188,9 +193,12 @@ long sys_fork(struct trap_frame *tf)
     struct trap_frame *ctf = task_frame(c);
     *ctf = *tf;
     ctf->x[0] = 0;          // child's fork() result
+    fpsimd_save(&c->fp);    // parent's live FP registers
     c->ctx.lr = (uintptr_t)ret_from_fork;
     c->ctx.sp = (uintptr_t)ctf;
     c->parent = p;
+    c->pgid = p->pgid;
+    c->brk_base = p->brk_base, c->brk = p->brk, c->brk_mapped = p->brk_mapped;
     for (int i = 0; i < NFD; i++)
         if ((c->fd[i] = p->fd[i]))
             c->fd[i]->refs++;
@@ -274,6 +282,97 @@ long sys_waitpid(int pid, uint64_t ustatus, int options)
         }
         if (!have)
             return -ECHILD;
-        sleep_on(self);     // woken by do_exit of a child
+        if (sleep_on(self)) // woken by do_exit of a child
+            return -EINTR;
     }
+}
+
+// Mark a user task for death; it exits with `sig` on its next return to EL0.
+static void signal_task(struct task *t, int sig)
+{
+    if (!t->pgd || t->state == TASK_ZOMBIE || t->state == TASK_UNUSED || t == init_task)
+        return;
+    if (!t->killed)
+        t->killed = sig;
+    if (t->state == TASK_WAITING && t->wchan)
+        t->state = TASK_RUNNABLE;   // sleep_on returns -EINTR
+}
+
+void kill_pgrp(int pgid, int sig)
+{
+    for (int i = 1; i < MAX_TASKS; i++)
+        if (tasks[i].state != TASK_UNUSED && tasks[i].pgid == pgid)
+            signal_task(&tasks[i], sig);
+}
+
+long sys_kill(int pid, int sig)
+{
+    if (sig < 1 || sig > 31)
+        return -EINVAL;
+    for (int i = 1; i < MAX_TASKS; i++) {
+        struct task *t = &tasks[i];
+        if (t->state == TASK_UNUSED || t->pid != pid)
+            continue;
+        if (t == init_task || !t->pgd)
+            return -EPERM;
+        signal_task(t, sig);
+        return 0;
+    }
+    return -ESRCH;
+}
+
+long sys_setpgid(int pid, int pgid)
+{
+    struct task *self = current_task(), *t = NULL;
+    if (pid == 0)
+        pid = self->pid;
+    if (pgid == 0)
+        pgid = pid;
+    if (pgid < 0)
+        return -EINVAL;
+    for (int i = 1; i < MAX_TASKS && !t; i++)
+        if (tasks[i].state != TASK_UNUSED && tasks[i].pid == pid)
+            t = &tasks[i];
+    if (!t || t->state == TASK_ZOMBIE)
+        return -ESRCH;
+    if (t != self && t->parent != self)
+        return -EPERM;
+    t->pgid = pgid;
+    return 0;
+}
+
+long sys_getprocs(uint64_t ubuf, int max)
+{
+    if (max < 0 || !vm_check(current_task()->pgd, ubuf, (uint64_t)max * sizeof(struct procinfo), 1))
+        return -EFAULT;
+    struct procinfo *out = (struct procinfo *)ubuf;
+    int n = 0;
+    for (int i = 0; i < MAX_TASKS && n < max; i++) {
+        struct task *t = &tasks[i];
+        if (t->state == TASK_UNUSED || (i && t->state == TASK_WAITING && !t->wchan))
+            continue;   // free, or reserved mid-creation
+        struct procinfo *p = &out[n++];
+        p->pid = t->pid;
+        p->ppid = t->parent ? t->parent->pid : 0;
+        p->pgid = t->pgid;
+        p->state = t->state == TASK_ZOMBIE ? 'Z' : t->state == TASK_WAITING ? 'S' : 'R';
+        memset(p->name, 0, sizeof p->name);
+        memcpy(p->name, t->name, sizeof p->name - 1);
+    }
+    return n;
+}
+
+// Heap grows up from the end of the program image toward the stack (one guard
+// page between). Returns the new break, or the old one on failure (Linux ABI).
+// shortcut: shrinking only moves the break; pages stay mapped until exit.
+long sys_brk(uint64_t addr)
+{
+    struct task *t = current_task();
+    if (addr < t->brk_base || addr > USER_STACK_BASE - PAGE_SIZE)
+        return (long)t->brk;
+    for (; t->brk_mapped < addr; t->brk_mapped += PAGE_SIZE)
+        if (!vm_alloc_page(t->pgd, t->brk_mapped, VM_NX))
+            return (long)t->brk;
+    t->brk = addr;
+    return (long)addr;
 }

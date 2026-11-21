@@ -1,5 +1,6 @@
 // Device nodes in /dev: console (UART, cooked line input) and null.
 #include "kernel.h"
+#include "proc.h"
 #include "sched.h"
 #include "uart.h"
 #include "vfs.h"
@@ -17,6 +18,25 @@ static char ready[READY_MAX];
 static size_t ready_head, ready_count;
 static int eof_pending;
 static int console_chan;    // sleep channel
+static int fg_pgid;         // ^C target group; 0 = none
+static int raw;             // TTY_RAW: bytes pass straight to read(), no echo
+
+long sys_ttymode(int mode)
+{
+    if (mode != TTY_COOKED && mode != TTY_RAW)
+        return -EINVAL;
+    raw = mode == TTY_RAW;
+    line_len = 0;
+    return 0;
+}
+
+long sys_tcsetpgrp(int pgid)
+{
+    if (pgid < 0)
+        return -EINVAL;
+    fg_pgid = pgid;
+    return 0;
+}
 
 static void ready_push(const char *s, size_t n)
 {
@@ -26,7 +46,9 @@ static void ready_push(const char *s, size_t n)
 
 void console_input(char c)
 {
-    if (c == '\r' || c == '\n') {
+    if (raw) {                  // ^C too: a raw program (editor) decides what it means
+        ready_push(&c, 1);
+    } else if (c == '\r' || c == '\n') {
         uart_puts("\n");
         line[line_len++] = '\n';
         ready_push(line, line_len);
@@ -36,9 +58,11 @@ void console_input(char c)
             line_len--;
             uart_puts("\b \b");
         }
-    } else if (c == 3) {            // ^C: no signals yet, discard the line
+    } else if (c == 3) {            // ^C: discard the line, kill the foreground group
         uart_puts("^C\n");
         line_len = 0;
+        if (fg_pgid)
+            kill_pgrp(fg_pgid, SIGINT);
     } else if (c == 4) {            // ^D: flush line; on empty line, EOF
         if (line_len)
             ready_push(line, line_len);
@@ -58,7 +82,8 @@ static long console_read(struct inode *ino, char *buf, size_t len, uint64_t off)
 {
     (void)ino, (void)off;
     while (ready_count == 0 && !eof_pending)
-        sleep_on(&console_chan);
+        if (sleep_on(&console_chan))
+            return -EINTR;
     if (ready_count == 0) {
         eof_pending--;
         return 0;
@@ -69,7 +94,7 @@ static long console_read(struct inode *ino, char *buf, size_t len, uint64_t off)
         ready_head = (ready_head + 1) % READY_MAX;
         ready_count--;
         buf[n++] = c;
-        if (c == '\n')
+        if (c == '\n' && !raw)
             break;      // one line per read, like a cooked tty
     }
     return (long)n;

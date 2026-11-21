@@ -29,3 +29,41 @@ task_entry:
     mov     x0, x20
     blr     x19
     bl      task_exit
+
+// void fpsimd_save(struct fpstate *), fpsimd_load(const struct fpstate *)
+// q0-q31 then fpsr, fpcr. Layout must match struct fpstate in sched.h.
+.macro QREGS op
+    \op    q0, q1, [x0, #0]
+    \op    q2, q3, [x0, #32]
+    \op    q4, q5, [x0, #64]
+    \op    q6, q7, [x0, #96]
+    \op    q8, q9, [x0, #128]
+    \op    q10, q11, [x0, #160]
+    \op    q12, q13, [x0, #192]
+    \op    q14, q15, [x0, #224]
+    \op    q16, q17, [x0, #256]
+    \op    q18, q19, [x0, #288]
+    \op    q20, q21, [x0, #320]
+    \op    q22, q23, [x0, #352]
+    \op    q24, q25, [x0, #384]
+    \op    q26, q27, [x0, #416]
+    \op    q28, q29, [x0, #448]
+    \op    q30, q31, [x0, #480]
+.endm
+.global fpsimd_save
+fpsimd_save:
+    QREGS stp
+    mrs     x9, fpsr
+    mrs     x10, fpcr
+    add     x0, x0, #512
+    stp     x9, x10, [x0]
+    ret
+
+.global fpsimd_load
+fpsimd_load:
+    QREGS ldp
+    add     x0, x0, #512
+    ldp     x9, x10, [x0]
+    msr     fpsr, x9
+    msr     fpcr, x10
+    ret

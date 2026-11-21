@@ -10,7 +10,8 @@ long sys_execve(struct trap_frame *tf, uint64_t upath, uint64_t uargv, uint64_t 
 long sys_waitpid(int pid, uint64_t ustatus, int options);
 long syscall_dispatch(struct trap_frame *tf);
 struct inode;
-int elf_load(uint64_t *pgd, struct inode *ino, uint64_t *entry);
+int elf_load(uint64_t *pgd, struct inode *ino, uint64_t *entry, uint64_t *top);
+long sys_brk(uint64_t addr);
 long copyin_str(char *dst, uint64_t uva, size_t max);
 
 struct initrd_file { const char *name; const uint8_t *start, *end; };
@@ -32,3 +33,9 @@ long sys_unlink(uint64_t upath);
 long sys_rmdir(uint64_t upath);
 long sys_rename(uint64_t uold, uint64_t unew);
 long sys_getdents(int fd, uint64_t ubuf, uint64_t len);
+long sys_kill(int pid, int sig);
+long sys_setpgid(int pid, int pgid);
+long sys_getprocs(uint64_t ubuf, int max);
+long sys_tcsetpgrp(int pgid);
+long sys_ttymode(int mode);
+void kill_pgrp(int pgid, int sig);

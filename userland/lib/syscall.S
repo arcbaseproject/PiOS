@@ -29,3 +29,11 @@ SYSCALL unlink,  SYS_unlink
 SYSCALL rmdir,   SYS_rmdir
 SYSCALL rename,  SYS_rename
 SYSCALL getdents, SYS_getdents
+SYSCALL kill,    SYS_kill
+SYSCALL setpgid, SYS_setpgid
+SYSCALL tcsetpgrp, SYS_tcsetpgrp
+SYSCALL ttymode, SYS_ttymode
+SYSCALL getprocs, SYS_getprocs
+SYSCALL brk,     SYS_brk
+SYSCALL nanosleep, SYS_nanosleep
+SYSCALL clock_gettime, SYS_clock_gettime

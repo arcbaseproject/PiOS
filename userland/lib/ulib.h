@@ -25,10 +25,38 @@ int unlink(const char *path);
 int rmdir(const char *path);
 int rename(const char *from, const char *to);
 long getdents(int fd, struct dirent *buf, size_t len);
+int kill(int pid, int sig);
+int setpgid(int pid, int pgid);
+int tcsetpgrp(int pgid);
+int ttymode(int mode);
+int getprocs(struct procinfo *buf, int max);
+long brk(void *addr);           /* raw: returns the new (or unchanged) break */
+int nanosleep(const struct timespec *req, struct timespec *rem);   /* rem unused */
+int clock_gettime(int clk, struct timespec *ts);
 
 size_t strlen(const char *s);
 int strcmp(const char *a, const char *b);
 void *memset(void *d, int c, size_t n);
 void *memcpy(void *d, const void *s, size_t n);
+void *memmove(void *d, const void *s, size_t n);
+int memcmp(const void *a, const void *b, size_t n);
+int strncmp(const char *a, const char *b, size_t n);
+char *strchr(const char *s, int c);
+long atol(const char *s);
+
+void *sbrk(long inc);           /* (void *)-1 on failure */
+void *malloc(size_t n);
+void free(void *p);
+void *calloc(size_t n, size_t size);
+void *realloc(void *p, size_t n);
+
+#include <stdarg.h>
+int vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap);
+int snprintf(char *buf, size_t cap, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
+int vdprintf(int fd, const char *fmt, va_list ap);
+int dprintf(int fd, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+int printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void puts(const char *s);       /* no newline added */
 void putnum(long v);
+void eputs(const char *s);      /* to fd 2 */
+void err(const char *who, const char *what, long e);   /* "who: what: message\n" to fd 2 */
