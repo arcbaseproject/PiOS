@@ -54,7 +54,6 @@ void handle_sync(struct trap_frame *tf)
 
 void handle_irq(struct trap_frame *tf)
 {
-    (void)tf;
     uint32_t src = *(volatile uint32_t *)CORE0_IRQ_SOURCE;
     int handled = 0;
     if ((src & SRC_GPU) && uart_irq_pending()) {
@@ -69,6 +68,8 @@ void handle_irq(struct trap_frame *tf)
         schedule();     // tick ends the timeslice; RX may have woken a reader
     else
         kprintf("[IRQ] spurious, source=%x\n", src);
+    if ((tf->spsr & 0xf) == 0 && current_task()->killed)   // returning to EL0t
+        do_exit(current_task()->killed);
 }
 
 // Exceptions from EL0: syscalls, or faults that kill the process.
@@ -78,6 +79,8 @@ void handle_el0_sync(struct trap_frame *tf)
     unsigned ec = (esr >> 26) & 0x3f;
     if (ec == 0x15) {
         tf->x[0] = (uint64_t)syscall_dispatch(tf);
+        if (current_task()->killed)
+            do_exit(current_task()->killed);
         return;
     }
     struct task *t = current_task();

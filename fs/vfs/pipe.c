@@ -18,7 +18,8 @@ static long pipe_read(struct inode *ino, char *buf, size_t len, uint64_t off)
     while (p->count == 0) {
         if (p->writers == 0)
             return 0;               // EOF
-        sleep_on(p);
+        if (sleep_on(p))
+            return -EINTR;
     }
     size_t n = 0;
     while (n < len && p->count) {
@@ -40,7 +41,8 @@ static long pipe_write(struct inode *ino, const char *buf, size_t len, uint64_t 
             return n ? (long)n : -EPIPE;    // no SIGPIPE yet
         if (p->count == PAGE_SIZE) {
             wakeup(p);
-            sleep_on(p);
+            if (sleep_on(p))
+                return -EINTR;
             continue;
         }
         p->buf[(p->head + p->count) % PAGE_SIZE] = buf[n++];
