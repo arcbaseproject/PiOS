@@ -280,3 +280,32 @@
   load at their ELF addresses (0x400000 for BusyBox). The stack is the top
   256 KiB below 0xC0000000, mmap grows down beneath it, brk grows up from
   the image end; each keeps a guard page from the other.
+
+## Phase 10
+
+- **USB rework**: a device table (root device plus hub ports) with class
+  drivers for hubs, HID boot keyboards and CDC-ECM. Endpoint packet sizes
+  and data toggles are tracked per endpoint. Control/interrupt/bulk-out
+  transfers are synchronous on channel 0. Bulk IN cannot be: in buffer-DMA
+  mode the core retries NAKs itself, so a receive only finishes when data
+  arrives. Channel 1 therefore stays armed and is checked without blocking
+  (usb_bulk_rx); the old blocking attempt timed out after 100 ms and dropped
+  frames that arrived as the channel was disabled. While frames flow the USB
+  thread polls back-to-back (yielding), otherwise every tick.
+- **CDC-ECM**: picks the configuration with an ECM control interface, reads
+  the MAC from the iMACAddress string, selects the data interface's bulk
+  alternate setting, sets the packet filter. Frames are raw Ethernet.
+- **lwIP**: 2.2.0 unmodified in net/lwip (core, IPv4, Ethernet), NO_SYS
+  raw API. The lock is "IRQs masked": syscalls already run that way, and the
+  USB and net threads mask IRQs around every lwIP call and USB transfer. A
+  "net" kernel thread runs lwIP timers and loopback delivery every tick.
+  ARP_QUEUEING is on: without it, of two packets sent while ARP resolved only
+  the last survived (musl sends its A and AAAA DNS queries back to back).
+- **Sockets** (net/socket.c): S_IFSOCK inodes, so read/write/close/ppoll
+  work on them. TCP receive data is a pbuf chain acknowledged (tcp_recved)
+  as it is read; accepted connections queue on the listener; lwIP callbacks
+  wake sleepers. UDP and raw ICMP keep a datagram queue; raw sockets see
+  the IP header like Linux. Unsupported: AF_UNIX, IPv6, IP_HDRINCL, socket
+  timeouts, ancillary data.
+- **setitimer** (ITIMER_REAL): per-task deadline in ticks, checked in the
+  timer IRQ, delivers SIGALRM (BusyBox ping's interval timer).

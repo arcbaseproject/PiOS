@@ -57,6 +57,8 @@ long vfs_lookup_nofollow(const char *path, struct inode **out);   // final symli
 long vfs_lookup_parent(const char *path, struct inode **dir, char *name);
 long vfs_create(const char *path, uint32_t mode, struct inode **out);
 struct file *file_new(struct inode *ino, int flags);
+struct file *getf(int fd);          // current task's open file, or NULL
+int fd_install(struct file *f);     // lowest free fd (FD_CLOEXEC clear), or -EMFILE
 void file_put(struct file *f);
 void vfs_init(void);
 

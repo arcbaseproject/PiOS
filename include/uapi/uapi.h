@@ -35,6 +35,8 @@
 #define SYS_exit_group    94
 #define SYS_set_tid_address 96
 #define SYS_nanosleep     101
+#define SYS_getitimer     102
+#define SYS_setitimer     103
 #define SYS_clock_gettime 113
 #define SYS_sched_yield   124
 #define SYS_kill          129
@@ -64,6 +66,22 @@
 #define SYS_mprotect      226
 #define SYS_madvise       233
 #define SYS_wait4         260
+#define SYS_socket        198
+#define SYS_socketpair    199
+#define SYS_bind          200
+#define SYS_listen        201
+#define SYS_accept        202
+#define SYS_connect       203
+#define SYS_getsockname   204
+#define SYS_getpeername   205
+#define SYS_sendto        206
+#define SYS_recvfrom      207
+#define SYS_setsockopt    208
+#define SYS_getsockopt    209
+#define SYS_shutdown      210
+#define SYS_sendmsg       211
+#define SYS_recvmsg       212
+#define SYS_accept4       242
 #define SYS_getprocs      1000    /* PiOS: getprocs(struct procinfo *buf, int max) -> count */
 
 #define AT_FDCWD        (-100)
@@ -104,6 +122,34 @@
 #define MAP_PRIVATE   0x02
 #define MAP_FIXED     0x10
 #define MAP_ANONYMOUS 0x20
+
+/* sockets */
+#define AF_UNIX     1
+#define AF_INET     2
+#define SOCK_STREAM 1
+#define SOCK_DGRAM  2
+#define SOCK_RAW    3
+#define SOCK_NONBLOCK 0x800
+#define SOCK_CLOEXEC  0x80000
+#define IPPROTO_IP   0
+#define IPPROTO_ICMP 1
+#define IPPROTO_TCP  6
+#define IPPROTO_UDP  17
+#define SOL_SOCKET  1
+#define SO_REUSEADDR 2
+#define SO_TYPE      3
+#define SO_ERROR     4
+#define SO_BROADCAST 6
+#define SO_KEEPALIVE 9
+#define TCP_NODELAY  1
+#define SHUT_RD   0
+#define SHUT_WR   1
+#define SHUT_RDWR 2
+#define MSG_PEEK     0x2
+#define MSG_DONTWAIT 0x40
+#define MSG_NOSIGNAL 0x4000
+#define FIONREAD  0x541B
+#define FIONBIO   0x5421
 
 /* ppoll */
 #define POLLIN   0x01
@@ -153,6 +199,26 @@
 #define ENOTTY  25
 #define ELOOP   40
 #define ENODEV  19
+#define ENOTSOCK     88
+#define EDESTADDRREQ 89
+#define EMSGSIZE     90
+#define ENOPROTOOPT  92
+#define EPROTONOSUPPORT 93
+#define EOPNOTSUPP   95
+#define EAFNOSUPPORT 97
+#define EADDRINUSE   98
+#define EADDRNOTAVAIL 99
+#define ENETUNREACH  101
+#define ECONNABORTED 103
+#define ECONNRESET   104
+#define ENOBUFS      105
+#define EISCONN      106
+#define ENOTCONN     107
+#define ETIMEDOUT    110
+#define ECONNREFUSED 111
+#define EHOSTUNREACH 113
+#define EALREADY     114
+#define EINPROGRESS  115
 
 /* wait status encoding (POSIX-style) */
 #define W_EXITCODE(code) (((code) & 0xff) << 8)
@@ -200,6 +266,8 @@
 #define S_IFDIR  0040000
 #define S_IFREG  0100000
 #define S_IFLNK  0120000
+#define S_IFSOCK 0140000
+#define S_ISSOCK(m) (((m) & S_IFMT) == S_IFSOCK)
 #define S_ISLNK(m) (((m) & S_IFMT) == S_IFLNK)
 #define DT_FIFO 1           /* dirent64.d_type */
 #define DT_CHR  2
@@ -259,6 +327,28 @@ struct k_sigaction {        /* rt_sigaction argument */
 struct pollfd {
     int32_t fd;
     int16_t events, revents;
+};
+
+struct sockaddr_in {
+    uint16_t sin_family;
+    uint16_t sin_port;      /* network byte order */
+    uint32_t sin_addr;      /* network byte order */
+    uint8_t sin_zero[8];
+};
+
+struct msghdr {
+    uint64_t msg_name;      /* struct sockaddr * */
+    uint32_t msg_namelen, __pad1;
+    uint64_t msg_iov;       /* struct iovec * */
+    uint64_t msg_iovlen;
+    uint64_t msg_control;
+    uint64_t msg_controllen;
+    int32_t msg_flags, __pad2;
+};
+
+struct itimerval {          /* ITIMER_REAL only */
+    int64_t interval_sec, interval_usec;
+    int64_t value_sec, value_usec;
 };
 
 struct iovec {

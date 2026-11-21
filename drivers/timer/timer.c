@@ -3,6 +3,7 @@
 #include "kernel.h"
 #include "mmio.h"
 #include "mm.h"
+#include "proc.h"
 #include "sched.h"
 #include "timer.h"
 #include "uapi.h"
@@ -29,6 +30,7 @@ void timer_irq(void)
 {
     write_sysreg(cntp_tval_el0, interval);      // re-arm; also clears the condition
     ticks++;
+    itimer_tick(ticks);
     wakeup((void *)&ticks);     // nanosleep()ers recheck their deadline
 }
 

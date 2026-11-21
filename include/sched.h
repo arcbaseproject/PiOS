@@ -36,6 +36,7 @@ struct task {
     uint64_t tpidr;             // TPIDR_EL0 (user thread pointer), saved while switched out
     uint64_t mmap_low;          // lowest mmap'd address; mmap grows down from the stack
     uint32_t umask;
+    uint64_t alarm_at, alarm_every;  // ITIMER_REAL in ticks (0 = off)
     char name[16];
     void *kstack;               // one page; NULL for idle, and for zombies once switched out
     uint64_t *pgd;              // user page table; NULL = kernel thread

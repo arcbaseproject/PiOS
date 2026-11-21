@@ -42,6 +42,13 @@ int fcntl(int fd, int cmd, long arg);
 void *mmap(void *addr, size_t len, int prot, int flags, int fd, long off);   /* -errno cast on failure */
 int munmap(void *addr, size_t len);
 int uname(struct utsname *u);
+int socket(int domain, int type, int proto);
+int bind(int fd, const struct sockaddr_in *a, unsigned len);
+int listen(int fd, int backlog);
+int accept(int fd, struct sockaddr_in *a, unsigned *len);
+int connect(int fd, const struct sockaddr_in *a, unsigned len);
+long sendto(int fd, const void *buf, size_t len, int flags, const struct sockaddr_in *a, unsigned alen);
+long recvfrom(int fd, void *buf, size_t len, int flags, struct sockaddr_in *a, unsigned *alen);
 typedef void (*sighandler_t)(int);
 sighandler_t signal(int sig, sighandler_t h);   /* h may be (sighandler_t)SIG_DFL / SIG_IGN; returns old or (sighandler_t)-errno */
 int getprocs(struct procinfo *buf, int max);

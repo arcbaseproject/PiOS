@@ -5,6 +5,7 @@
 #include "proc.h"
 #include "sched.h"
 #include "uapi.h"
+#include "timer.h"
 #include "vfs.h"
 
 #define MAX_ARGS 32
@@ -141,6 +142,7 @@ static long exec_image(struct task *t, struct trap_frame *tf, const char *path,
         t->sigflags[i] = t->sigactmask[i] = 0;
     }
     t->sigpend = 0;
+    t->alarm_at = t->alarm_every = 0;
     for (int i = 0; i < NFD; i++)
         if (t->fd[i] && t->cloexec[i]) {
             file_put(t->fd[i]);
@@ -671,4 +673,65 @@ long sys_umask(int mask)
     long old = t->umask;
     t->umask = (uint32_t)mask & 0777;
     return old;
+}
+
+// ---- ITIMER_REAL: SIGALRM from the timer tick ----
+
+static uint64_t to_ticks(int64_t sec, int64_t usec)
+{
+    uint64_t us = (uint64_t)sec * 1000000 + (uint64_t)usec, t = 1000000 / HZ;
+    return (us + t - 1) / t;
+}
+
+static void from_ticks(uint64_t ticks, int64_t *sec, int64_t *usec)
+{
+    *sec = (int64_t)(ticks / HZ);
+    *usec = (int64_t)(ticks % HZ) * (1000000 / HZ);
+}
+
+static void get_itimer(struct task *t, struct itimerval *v)
+{
+    uint64_t now = timer_ticks(), left = t->alarm_at > now ? t->alarm_at - now : 0;
+    from_ticks(t->alarm_every, &v->interval_sec, &v->interval_usec);
+    from_ticks(t->alarm_at ? left : 0, &v->value_sec, &v->value_usec);
+}
+
+long sys_getitimer(int which, uint64_t uval)
+{
+    struct task *t = current_task();
+    if (which != 0)
+        return -EINVAL;
+    if (!vm_check(t->pgd, uval, sizeof(struct itimerval), 1))
+        return -EFAULT;
+    get_itimer(t, (struct itimerval *)uval);
+    return 0;
+}
+
+long sys_setitimer(int which, uint64_t unew, uint64_t uold)
+{
+    struct task *t = current_task();
+    if (which != 0)
+        return -EINVAL;     // shortcut: no ITIMER_VIRTUAL / ITIMER_PROF
+    if (!vm_check(t->pgd, unew, sizeof(struct itimerval), 0) ||
+        (uold && !vm_check(t->pgd, uold, sizeof(struct itimerval), 1)))
+        return -EFAULT;
+    struct itimerval nv = *(struct itimerval *)unew;
+    if (uold)
+        get_itimer(t, (struct itimerval *)uold);
+    uint64_t v = to_ticks(nv.value_sec, nv.value_usec);
+    t->alarm_at = v ? timer_ticks() + v : 0;
+    t->alarm_every = to_ticks(nv.interval_sec, nv.interval_usec);
+    return 0;
+}
+
+// From the timer IRQ.
+void itimer_tick(uint64_t now)
+{
+    for (int i = 1; i < MAX_TASKS; i++) {
+        struct task *t = &tasks[i];
+        if (!t->alarm_at || now < t->alarm_at || t->state == TASK_UNUSED || t->state == TASK_ZOMBIE)
+            continue;
+        t->alarm_at = t->alarm_every ? now + t->alarm_every : 0;
+        signal_task(t, SIGALRM);
+    }
 }

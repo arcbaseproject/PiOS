@@ -21,8 +21,15 @@ SRCS := arch/aarch64/boot/start.S arch/aarch64/exception/vectors.S \
         fs/vfs/vfs.c fs/vfs/sysfile.c fs/vfs/pipe.c fs/ramfs/ramfs.c fs/devfs/devfs.c \
         kernel/process/initrd.S kernel/syscall/syscall.c \
         drivers/sd/emmc.c fs/fat/fat32.c drivers/fb/fbcon.c drivers/fb/font.c \
-        drivers/usb/dwc2.c
+        drivers/usb/dwc2.c drivers/usb/ecm.c net/net.c net/socket.c
+# lwIP 2.2.0 (BSD, net/lwip/COPYING): IPv4, TCP, UDP, DHCP, DNS, ARP.
+LWIP_SRCS := $(wildcard net/lwip/core/*.c net/lwip/core/ipv4/*.c net/lwip/netif/*.c)
+SRCS += $(LWIP_SRCS)
 OBJS := $(patsubst %,build/%.o,$(SRCS))
+NET_INC := -nostdlibinc -Inet/port -Inet/lwip/include
+build/net/%: CFLAGS += $(NET_INC)
+build/drivers/usb/%: CFLAGS += $(NET_INC)
+build/net/lwip/%: CFLAGS := $(filter-out -Werror,$(CFLAGS)) $(NET_INC) -Wno-unused-parameter
 
 # Userland: static ELFs linked at USER_BASE, embedded via kernel/process/initrd.S.
 UTESTS := hello segv spin fpu

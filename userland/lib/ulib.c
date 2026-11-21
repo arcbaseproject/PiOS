@@ -207,6 +207,8 @@ int dup2(int fd, int nfd)
 
 int tcsetpgrp(int pgid) { return ioctl(0, TIOCSPGRP, &pgid); }
 int fcntl(int fd, int cmd, long arg) { return (int)__fcntl(fd, cmd, arg); }
+long __accept4(int fd, struct sockaddr_in *a, unsigned *len, int flags);
+int accept(int fd, struct sockaddr_in *a, unsigned *len) { return (int)__accept4(fd, a, len, 0); }
 
 int ttymode(int mode)
 {

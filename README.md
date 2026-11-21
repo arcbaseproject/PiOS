@@ -72,6 +72,16 @@ QEMU with a disk image: `qemu-system-aarch64 -M raspi3b -kernel kernel8.img
 (image size must be a power of two). `tools/mksdimg.py sd.img [path=file ...]`
 builds one, and `tools/qemu-drive.py` scripts a session (see the files).
 
+### Networking
+
+Plug a USB Ethernet adapter that supports CDC-ECM (the standard USB
+Ethernet class; many RTL8153 adapters do, QEMU's `usb-net` does) into the OTG
+port, directly or through a USB 1.1 hub. PiOS takes an address by DHCP and
+writes /etc/resolv.conf. With BusyBox installed, `ping`, `wget`, `nslookup`
+and `nc` work. Wi-Fi is not supported. QEMU:
+`-device usb-net,netdev=n0 -netdev user,id=n0` (add
+`,hostfwd=tcp:127.0.0.1:8080-:80` to reach a server in PiOS).
+
 ### BusyBox (about 300 more commands)
 
 PiOS runs static Linux/AArch64 binaries. Copy Alpine's static BusyBox to the
@@ -92,3 +102,6 @@ Green ACT LED flashing a pattern then nothing = firmware could not find a file.
   license (full text at the end of `userland/lua/lua.h`).
 - `drivers/fb/font.c`: bitmap rendering of DejaVu Sans Mono, Bitstream Vera
   license (notice in the file).
+- `net/lwip`: lwIP 2.2.0 TCP/IP stack (core, IPv4, Ethernet), Copyright (c)
+  2001-2004 Swedish Institute of Computer Science, BSD license
+  (`net/lwip/COPYING`).

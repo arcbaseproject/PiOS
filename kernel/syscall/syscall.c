@@ -2,6 +2,7 @@
 // shortcut: syscalls run with IRQs masked (exception entry state); fine while all are short or block via schedule().
 #include "kernel.h"
 #include "mm.h"
+#include "net.h"
 #include "proc.h"
 #include "sched.h"
 #include "uapi.h"
@@ -82,8 +83,25 @@ static long dispatch(struct trap_frame *tf)
     case SYS_munmap:  return sys_munmap(a[0], a[1]);
     case SYS_mprotect: case SYS_madvise: return 0;
     case SYS_nanosleep: return sys_nanosleep(a[0]);
+    case SYS_getitimer: return sys_getitimer((int)a[0], a[1]);
+    case SYS_setitimer: return sys_setitimer((int)a[0], a[1], a[2]);
     case SYS_clock_gettime: return sys_clock_gettime((int)a[0], a[1]);
     case SYS_getprocs: return sys_getprocs(a[0], (int)a[1]);
+    case SYS_socket:  return sys_socket((int)a[0], (int)a[1], (int)a[2]);
+    case SYS_bind:    return sys_bind((int)a[0], a[1], a[2]);
+    case SYS_listen:  return sys_listen((int)a[0], (int)a[1]);
+    case SYS_accept:  return sys_accept4((int)a[0], a[1], a[2], 0);
+    case SYS_accept4: return sys_accept4((int)a[0], a[1], a[2], (int)a[3]);
+    case SYS_connect: return sys_connect((int)a[0], a[1], a[2]);
+    case SYS_getsockname: return sys_getsockname((int)a[0], a[1], a[2], 0);
+    case SYS_getpeername: return sys_getsockname((int)a[0], a[1], a[2], 1);
+    case SYS_sendto:  return sys_sendto((int)a[0], a[1], a[2], (int)a[3], a[4], a[5]);
+    case SYS_recvfrom: return sys_recvfrom((int)a[0], a[1], a[2], (int)a[3], a[4], a[5]);
+    case SYS_sendmsg: return sys_sendmsg((int)a[0], a[1], (int)a[2]);
+    case SYS_recvmsg: return sys_recvmsg((int)a[0], a[1], (int)a[2]);
+    case SYS_setsockopt: return sys_setsockopt((int)a[0], (int)a[1], (int)a[2], a[3], a[4]);
+    case SYS_getsockopt: return sys_getsockopt((int)a[0], (int)a[1], (int)a[2], a[3], a[4]);
+    case SYS_shutdown: return sys_shutdown((int)a[0], (int)a[1]);
     default:          return -ENOSYS;
     }
 }

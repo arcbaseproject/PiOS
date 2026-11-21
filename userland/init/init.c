@@ -348,6 +348,35 @@ static void fs_tests(void)
     check("waitpid(WNOHANG) on a running child returns 0", waitpid(cpid, &cst, WNOHANG) == 0);
     check("then reaps it", waitpid(cpid, &cst, 0) == cpid && cst == W_EXITCODE(3));
 
+    // Sockets over lwIP's loopback interface (no network adapter needed).
+    struct sockaddr_in a = { AF_INET, 0x8813, 0x0100007f, {0} };     // 127.0.0.1:5000
+    char sb[16] = { 0 };
+    int u1 = socket(AF_INET, SOCK_DGRAM, 0), u2 = socket(AF_INET, SOCK_DGRAM, 0);
+    struct sockaddr_in from = { 0 };
+    unsigned fl = sizeof from;
+    check("UDP over 127.0.0.1", u1 >= 0 && u2 >= 0 && bind(u1, &a, sizeof a) == 0 &&
+          sendto(u2, "ping", 4, 0, &a, sizeof a) == 4 &&
+          recvfrom(u1, sb, sizeof sb, 0, &from, &fl) == 4 && memcmp(sb, "ping", 4) == 0 &&
+          from.sin_addr == 0x0100007f);
+    close(u1);
+    close(u2);
+    a.sin_port = 0x8913;                                    // 5001
+    int l = socket(AF_INET, SOCK_STREAM, 0), c = socket(AF_INET, SOCK_STREAM, 0), sv = -1;
+    check("TCP listen + connect over 127.0.0.1", l >= 0 && c >= 0 && bind(l, &a, sizeof a) == 0 &&
+          listen(l, 4) == 0 && connect(c, &a, sizeof a) == 0 && (sv = accept(l, 0, 0)) >= 0);
+    memset(sb, 0, sizeof sb);
+    check("TCP data both ways", write(c, "hello", 5) == 5 && read(sv, sb, sizeof sb) == 5 &&
+          memcmp(sb, "hello", 5) == 0 && write(sv, "world", 5) == 5 && read(c, sb, sizeof sb) == 5 &&
+          memcmp(sb, "world", 5) == 0);
+    close(sv);
+    check("TCP EOF after peer close", read(c, sb, sizeof sb) == 0);
+    close(c);
+    close(l);
+    c = socket(AF_INET, SOCK_STREAM, 0);
+    a.sin_port = 0x8a13;                                    // 5002: nobody listens
+    check("connect to a closed port -> ECONNREFUSED", connect(c, &a, sizeof a) == -ECONNREFUSED);
+    close(c);
+
     struct utsname u;
     check("uname: PiOS on aarch64", uname(&u) == 0 && strcmp(u.sysname, "PiOS") == 0 &&
           strcmp(u.machine, "aarch64") == 0);

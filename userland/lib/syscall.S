@@ -30,6 +30,13 @@ SYSCALL ioctl,   SYS_ioctl
 SYSCALL mmap,    SYS_mmap
 SYSCALL munmap,  SYS_munmap
 SYSCALL uname,   SYS_uname
+SYSCALL socket,  SYS_socket
+SYSCALL bind,    SYS_bind
+SYSCALL listen,  SYS_listen
+SYSCALL __accept4, SYS_accept4
+SYSCALL connect, SYS_connect
+SYSCALL sendto,  SYS_sendto
+SYSCALL recvfrom, SYS_recvfrom
 // Raw forms behind C wrappers in ulib.c.
 SYSCALL __clone, SYS_clone
 SYSCALL __wait4, SYS_wait4

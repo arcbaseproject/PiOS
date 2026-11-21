@@ -2,7 +2,8 @@
 # Boot kernel8.img in QEMU (raspi3b) and drive the serial console from a script.
 # usage: tools/qemu-drive.py IMG|- step...
 #   step: text to type (Python escapes, e.g. 'ls\r'), @SECS to wait,
-#         !CMD;CMD to send QEMU monitor commands (e.g. '!sendkey a')
+#         !CMD;CMD to send QEMU monitor commands (e.g. '!sendkey a'),
+#         %CMD to run a host shell command (its output is appended to the log)
 # env: QEMU_EXTRA (extra QEMU args, e.g. "-device usb-kbd"), SHOT=file.ppm (screendump at end)
 # Prints everything the console printed. Waits for the first "$ " prompt.
 import codecs, os, select, socket, subprocess, sys, tempfile, time
@@ -43,6 +44,12 @@ for st in sys.argv[2:]:
         pump(float(st[1:]))
     elif st.startswith("!"):
         monitor(st[1:].split(";"))
+        pump(0.5)
+    elif st.startswith("%"):
+        h = subprocess.Popen(st[1:], shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        while h.poll() is None:
+            pump(0.1)                   # keep the guest's console drained meanwhile
+        out += b"\n[host] " + h.stdout.read() + b"\n"
         pump(0.5)
     else:
         for ch in codecs.decode(st, "unicode_escape").encode("latin1"):

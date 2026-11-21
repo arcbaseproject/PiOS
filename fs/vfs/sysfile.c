@@ -1,19 +1,20 @@
 // File-related syscalls. Every user pointer is checked with vm_check first.
 #include "kernel.h"
 #include "mm.h"
+#include "net.h"
 #include "proc.h"
 #include "sched.h"
 #include "timer.h"
 #include "vfs.h"
 
-static struct file *getf(int fd)
+struct file *getf(int fd)
 {
     if (fd < 0 || fd >= NFD)
         return NULL;
     return current_task()->fd[fd];
 }
 
-static int fd_install(struct file *f)
+int fd_install(struct file *f)
 {
     struct task *t = current_task();
     for (int i = 0; i < NFD; i++)
@@ -490,7 +491,11 @@ long sys_fcntl(int fd, int cmd, uint64_t arg)
     case F_GETFD: return t->cloexec[fd] ? FD_CLOEXEC : 0;
     case F_SETFD: t->cloexec[fd] = (arg & FD_CLOEXEC) != 0; return 0;
     case F_GETFL: return f->flags;
-    case F_SETFL: f->flags = (f->flags & ~(O_APPEND | O_NONBLOCK)) | ((int)arg & (O_APPEND | O_NONBLOCK)); return 0;
+    case F_SETFL:
+        f->flags = (f->flags & ~(O_APPEND | O_NONBLOCK)) | ((int)arg & (O_APPEND | O_NONBLOCK));
+        if (S_ISSOCK(f->ino->mode))
+            sock_set_nonblock(f->ino, (f->flags & O_NONBLOCK) != 0);
+        return 0;
     }
     return -EINVAL;
 }

@@ -96,3 +96,12 @@ busybox.static, linked at 0x400000).
 - [x] init test suite: 78/78 pass in QEMU raspi3b
 - [ ] /proc (ps, top, free, /proc/self/exe), sendfile, select, file-backed mmap
 - [ ] Verified on real Pi Zero 2 W
+
+## Phase 10 - Networking
+- [x] USB host: device table, per-endpoint toggles, non-blocking bulk IN channel
+- [x] CDC-ECM USB Ethernet driver (QEMU usb-net; RTL8153-class adapters)
+- [x] lwIP 2.2.0 in the kernel: ARP, IPv4, ICMP, UDP, TCP, DHCP, loopback
+- [x] Linux socket syscalls (AF_INET TCP/UDP, raw ICMP), setitimer for ping
+- [x] busybox ping / wget / nslookup / nc; init test suite 83/83 in QEMU
+- [ ] Vendor USB Ethernet chips (AX88179, RTL8152), split transactions, Wi-Fi
+- [ ] IPv6, AF_UNIX, ifconfig/ip ioctls, wait queues instead of tick polling

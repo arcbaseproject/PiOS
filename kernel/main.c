@@ -1,3 +1,4 @@
+#include "net.h"
 #include "usb.h"
 #include "fbcon.h"
 #include "exception.h"
@@ -63,6 +64,7 @@ void kernel_main(void)
     sched_init();
     vfs_init();
     proc_create_init();
+    net_init();
     usb_init();
 
     timer_init();
