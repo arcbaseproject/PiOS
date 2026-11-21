@@ -1,5 +1,6 @@
 #include "exception.h"
 #include "kernel.h"
+#include "mmio.h"
 #include "proc.h"
 #include "uapi.h"
 #include "sched.h"
@@ -48,7 +49,7 @@ void handle_sync(struct trap_frame *tf)
 
 // BCM2836-style per-core local interrupt controller (ARM Quad-A7 control block,
 // also used on BCM2837/BCM2710). Core 0 IRQ source register.
-#define CORE0_IRQ_SOURCE 0x40000060UL
+#define CORE0_IRQ_SOURCE (LOCAL_BASE + 0x60)
 #define SRC_CNTPNSIRQ    (1u << 1)
 #define SRC_GPU          (1u << 8)   // BCM2835 controller, routed to core 0 by default
 

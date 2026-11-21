@@ -1,12 +1,13 @@
 // ARM generic timer, EL1 non-secure physical timer (CNTP), routed to core 0
 // IRQ through the local interrupt controller at 0x40000000.
 #include "kernel.h"
+#include "mmio.h"
 #include "mm.h"
 #include "sched.h"
 #include "timer.h"
 #include "uapi.h"
 
-#define CORE0_TIMER_IRQCNTL 0x40000040UL
+#define CORE0_TIMER_IRQCNTL (LOCAL_BASE + 0x40)
 #define CNTPNSIRQ_IRQ       (1u << 1)
 
 static uint64_t interval;

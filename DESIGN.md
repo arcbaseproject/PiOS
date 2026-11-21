@@ -23,10 +23,14 @@
 - **Memory size**: queried from firmware via mailbox property tag 0x00010005
   (never hardcoded; the GPU split changes it). Buffer address passed as bus
   address (`| 0xC0000000`), done before caches are on.
-- **MMU**: identity map, TTBR0 only, 4 KiB granule, T0SZ=25, 2 MiB blocks.
-  RAM normal WB cacheable; 0x3F000000-0x3FFFFFFF and 0x40000000-0x7FFFFFFF
-  device nGnRnE, execute-never. VideoCore RAM unmapped. Higher-half kernel and
-  TTBR1 deferred to Phase 4 when user address spaces exist.
+- **MMU**: the kernel is linked at KERNEL_VA (0xFFFFFF8000000000) + 0x80000
+  and runs in TTBR1, where every physical address pa appears at KERNEL_VA + pa
+  (P2V/V2P in mm.h). start.S builds the tables before any C runs: one L1
+  shared by TTBR0 (temporary identity map, for the jump) and TTBR1, an L2 of
+  2 MiB blocks (RAM normal WB cacheable, 0x3F000000+ device), and a 1 GiB
+  device block for the local peripherals at 0x40000000. It enables the MMU
+  and branches to the high address. mmu_init then unmaps VideoCore RAM and
+  points TTBR0 at an empty table. 4 KiB granule, T0SZ=T1SZ=25.
 - **Pages**: free list through free pages, from end of boot stack to end of ARM
   RAM. `page_alloc` returns zeroed pages. No contiguous allocation yet.
 - **Timer**: EL1 non-secure physical timer at 100 Hz, frequency from
@@ -57,13 +61,12 @@
 
 ## Phase 4
 
-- **Address spaces**: each process has its own L1 table in TTBR0. L1[0]
-  (kernel RAM + peripherals) and L1[1] (local peripherals) are copied from
-  `kernel_l1`; those blocks are AP=00 (EL1 only) and UXN, so EL0 cannot touch
-  them. User space is L1[2]: 0x80000000-0xBFFFFFFF, 4 KiB pages, PXN, nG.
-  Kept the kernel identity-mapped in low VA instead of a TTBR1 higher half:
-  no relink or position-independent boot needed, same isolation. Revisit if
-  user space needs more than 1 GiB.
+- **Address spaces**: each process has its own L1 table in TTBR0 holding
+  only user mappings (the kernel is in TTBR1, AP=00 and UXN, so EL0 cannot
+  touch it). PiOS programs use 0x80000000-0xBFFFFFFF, 4 KiB pages, PXN, nG;
+  the rest of the 512 GiB TTBR0 range is free (Linux binaries load at
+  0x400000). Page tables store physical addresses; the kernel edits them
+  through P2V. Kernel threads run with an empty TTBR0.
 - **Switch**: `schedule()` writes TTBR0 and does `tlbi vmalle1` when the next
   task's table differs. No ASIDs yet.
 - **Syscall ABI** (`include/uapi/uapi.h`): `svc #0`, number in x8, args

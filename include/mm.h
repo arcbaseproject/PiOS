@@ -3,8 +3,13 @@
 #include <stdint.h>
 #define PAGE_SIZE 4096UL
 
-/* User address space: one L1 slot (1 GiB) per process, above the shared
- * kernel identity map in L1[0] and device block in L1[1]. */
+/* Kernel half (TTBR1): every physical address pa is mapped at KERNEL_VA + pa
+ * (RAM, VideoCore RAM on demand, peripherals). User space lives in TTBR0. */
+#define KERNEL_VA 0xFFFFFF8000000000UL
+#define P2V(pa) ((void *)((uintptr_t)(pa) + KERNEL_VA))
+#define V2P(va) ((uintptr_t)(va) - KERNEL_VA)
+
+/* User address space: one L1 slot (1 GiB) per process. */
 #define USER_BASE        0x80000000UL
 #define USER_TOP         0xC0000000UL
 #define USER_STACK_PAGES 64    // 256 KiB, mapped eagerly (Lua's parser and VM recurse deeply)
@@ -15,10 +20,11 @@
 #define VM_RO   (1UL << 7)      /* AP[2]: read-only */
 #define VM_NX   (1UL << 54)     /* UXN: not executable at EL0 */
 
-extern uint64_t kernel_l1[512];
+extern uint64_t kernel_l1[512], kernel_l2[512];
 
 void mmu_init(uint64_t ram_end);
 void mmu_map_nc(uint64_t pa, uint64_t size);    // VideoCore RAM, e.g. framebuffer
+uint64_t empty_ttbr0(void);                     // physical address of an empty user table
 void page_init(uintptr_t start, uintptr_t end);
 void *page_alloc(void);
 void page_free(void *p);

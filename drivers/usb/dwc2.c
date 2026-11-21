@@ -11,6 +11,7 @@
 // LEDs, one keyboard. Add HCSPLT handling when USB 2.0 hubs matter.
 #include "kernel.h"
 #include "mailbox.h"
+#include "mm.h"
 #include "mmio.h"
 #include "sched.h"
 #include "timer.h"
@@ -87,7 +88,7 @@ static int xfer(int ch, struct dev *d, int ep, int type, int in, int pid, void *
     mmio_write(HCSPLT(ch), 0);
     mmio_write(HCTSIZ(ch), (uint32_t)len | (uint32_t)(len ? (len + mps - 1) / mps : 1) << 19 |
                            (uint32_t)pid << 29);
-    mmio_write(HCDMA(ch), (uint32_t)(uintptr_t)dma | BUS_UNCACHED);
+    mmio_write(HCDMA(ch), (uint32_t)V2P(dma) | BUS_UNCACHED);
     uint32_t odd = !(mmio_read(HFNUM) & 1);    // periodic: run in the next frame
     mmio_write(HCCHAR(ch), (uint32_t)mps | (uint32_t)ep << 11 | (uint32_t)in << 15 |
                            (uint32_t)d->low_speed << 17 | (uint32_t)type << 18 | 1u << 20 |

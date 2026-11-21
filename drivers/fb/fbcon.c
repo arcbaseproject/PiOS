@@ -161,7 +161,7 @@ void fbcon_init(void)
     }
     mmu_map_nc(pa, size);
     pitch = p / 4;
-    fb = (volatile uint32_t *)(uintptr_t)pa;
+    fb = P2V(pa);
     for (int r = 0; r < ROWS; r++)
         clear_cells(r, 0, COLS);
     cursor_xor();

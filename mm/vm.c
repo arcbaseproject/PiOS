@@ -1,5 +1,6 @@
-// Per-process user page tables (4 KiB pages, 3 levels from L1).
-// The kernel half (L1[0], L1[1]) is shared from kernel_l1 and EL1-only.
+// Per-process user page tables (4 KiB pages, 3 levels from L1), loaded in
+// TTBR0. Table entries hold physical addresses; the kernel reaches tables and
+// pages through its TTBR1 alias (P2V).
 #include "kernel.h"
 #include "mm.h"
 
@@ -20,12 +21,7 @@ uint64_t vm_make_pte(uint64_t pa, uint64_t flags)
 
 uint64_t *vm_new(void)
 {
-    uint64_t *pgd = page_alloc();
-    if (pgd) {
-        pgd[0] = kernel_l1[0];
-        pgd[1] = kernel_l1[1];
-    }
-    return pgd;
+    return page_alloc();
 }
 
 // Returns the L3 entry for a user va, allocating tables if asked.
@@ -40,9 +36,9 @@ uint64_t *vm_walk(uint64_t *pgd, uint64_t va, int alloc)
             void *n = page_alloc();
             if (!n)
                 return NULL;
-            *e = (uintptr_t)n | PTE_TABLE;
+            *e = V2P(n) | PTE_TABLE;
         }
-        t = (uint64_t *)PTE_ADDR(*e);
+        t = P2V(PTE_ADDR(*e));
     }
     return &t[(va >> 12) & 511];
 }
@@ -54,23 +50,23 @@ void *vm_alloc_page(uint64_t *pgd, uint64_t va, uint64_t flags)
         return NULL;
     void *pa = page_alloc();
     if (pa)
-        *pte = vm_make_pte((uintptr_t)pa, flags);
+        *pte = vm_make_pte(V2P(pa), flags);
     return pa;
 }
 
 void vm_free(uint64_t *pgd)
 {
-    for (int i = USER_BASE >> 30; i < 512; i++) {
+    for (int i = 0; i < 512; i++) {
         if (!(pgd[i] & PTE_VALID))
             continue;
-        uint64_t *l2 = (uint64_t *)PTE_ADDR(pgd[i]);
+        uint64_t *l2 = P2V(PTE_ADDR(pgd[i]));
         for (int j = 0; j < 512; j++) {
             if (!(l2[j] & PTE_VALID))
                 continue;
-            uint64_t *l3 = (uint64_t *)PTE_ADDR(l2[j]);
+            uint64_t *l3 = P2V(PTE_ADDR(l2[j]));
             for (int k = 0; k < 512; k++)
                 if (l3[k] & PTE_VALID)
-                    page_free((void *)PTE_ADDR(l3[k]));
+                    page_free(P2V(PTE_ADDR(l3[k])));
             page_free(l3);
         }
         page_free(l2);
@@ -84,14 +80,14 @@ uint64_t *vm_copy(uint64_t *src)
     uint64_t *dst = vm_new();
     if (!dst)
         return NULL;
-    for (int i = USER_BASE >> 30; i < 512; i++) {
+    for (int i = 0; i < 512; i++) {
         if (!(src[i] & PTE_VALID))
             continue;
-        uint64_t *l2 = (uint64_t *)PTE_ADDR(src[i]);
+        uint64_t *l2 = P2V(PTE_ADDR(src[i]));
         for (int j = 0; j < 512; j++) {
             if (!(l2[j] & PTE_VALID))
                 continue;
-            uint64_t *l3 = (uint64_t *)PTE_ADDR(l2[j]);
+            uint64_t *l3 = P2V(PTE_ADDR(l2[j]));
             for (int k = 0; k < 512; k++) {
                 if (!(l3[k] & PTE_VALID))
                     continue;
@@ -102,9 +98,9 @@ uint64_t *vm_copy(uint64_t *src)
                     vm_free(dst);
                     return NULL;
                 }
-                memcpy(pa, (void *)PTE_ADDR(l3[k]), PAGE_SIZE);
+                memcpy(pa, P2V(PTE_ADDR(l3[k])), PAGE_SIZE);
                 dcache_clean_pou((uintptr_t)pa, PAGE_SIZE);
-                *pte = (uintptr_t)pa | (l3[k] & ~PTE_ADDR(~0UL));
+                *pte = V2P(pa) | (l3[k] & ~PTE_ADDR(~0UL));
             }
         }
     }
@@ -129,7 +125,7 @@ int vm_check(uint64_t *pgd, uint64_t va, uint64_t len, int write)
 // shortcut: full TLB flush on every switch, no ASIDs; add ASIDs when switch cost shows up.
 void vm_activate(uint64_t *pgd)
 {
-    uint64_t *t = pgd ? pgd : kernel_l1;
+    uint64_t t = pgd ? V2P(pgd) : empty_ttbr0();
     __asm__ volatile("dsb ishst; msr ttbr0_el1, %0; isb; tlbi vmalle1; dsb ish; isb"
                      :: "r"(t) : "memory");
 }

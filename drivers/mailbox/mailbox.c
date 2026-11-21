@@ -2,6 +2,7 @@
 // around each call, so it works before and after caches are on.
 #include "kernel.h"
 #include "mailbox.h"
+#include "mm.h"
 #include "mmio.h"
 
 #define MBOX_BASE   (PERIPHERAL_BASE + 0xB880)
@@ -24,7 +25,7 @@ static void dcache_civac_buf(void)
 
 static int mbox_call(void)
 {
-    uint32_t msg = ((uint32_t)(uintptr_t)buf | BUS_UNCACHED) | CH_PROP;
+    uint32_t msg = ((uint32_t)V2P(buf) | BUS_UNCACHED) | CH_PROP;
     dcache_civac_buf();
     while (mmio_read(MBOX_STATUS) & MBOX_FULL)
         ;

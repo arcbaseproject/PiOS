@@ -12,7 +12,7 @@
 - [x] Exception vectors, register dump + panic (BRK test verified in QEMU)
 - [x] kprintf / panic
 - [x] Mailbox ARM memory query
-- [x] MMU identity map, D/I caches on
+- [x] MMU on, D/I caches on (kernel moved to the TTBR1 higher half in Phase 9)
 - [x] Page allocator + boot self-test
 - [x] Generic timer 100 Hz IRQ via local interrupt controller
 - [x] Verified in QEMU raspi3b
@@ -85,3 +85,11 @@
 - [ ] Verified on real Pi Zero 2 W
 - Next candidates: COW fork,
   RTC-less wall clock (set by user), SMP, USB, network.
+
+## Phase 9 - Linux binary compatibility
+Goal: run unmodified static Linux/AArch64 binaries (first target: Alpine's
+busybox.static, linked at 0x400000).
+- [x] Kernel in the TTBR1 higher half; user space owns all of TTBR0
+- [ ] Linux ELF loading: stack with argc/argv/envp/auxv, TPIDR_EL0 per task
+- [ ] Linux syscall numbers and semantics for what BusyBox uses
+- [ ] busybox echo / ls / sh run

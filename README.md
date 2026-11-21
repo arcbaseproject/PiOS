@@ -47,7 +47,7 @@ Expected (QEMU shown; real Pi reports ~448-500 MiB RAM and 19200000 Hz timer):
     [BOOT] Running at EL1
     [BOOT] Exception vectors installed
     [MEM] ARM RAM 0-3c000000 (960 MiB)
-    [MEM] MMU on: identity map, caches enabled
+    [MEM] MMU on: kernel at ffffff8000000000 (TTBR1), caches enabled
     [MEM] Page allocator: 245622 free pages (959 MiB)
     [TIMER] generic timer 62500000 Hz, tick 100 Hz
     [KERNEL] Hello from PiOS! Interrupts on.

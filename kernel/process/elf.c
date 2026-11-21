@@ -69,9 +69,9 @@ int elf_load(uint64_t *pgd, struct inode *ino, uint64_t *entry, uint64_t *top)
                 void *pa = page_alloc();
                 if (!pa)
                     return -ENOMEM;
-                *pte = vm_make_pte((uintptr_t)pa, flags);
+                *pte = vm_make_pte(V2P(pa), flags);
             }
-            uint8_t *page = (uint8_t *)PTE_ADDR(*pte);
+            uint8_t *page = P2V(PTE_ADDR(*pte));
             uint64_t lo = va > va0 ? va : va0;
             uint64_t fend = va0 + ph->filesz;
             uint64_t hi = va + PAGE_SIZE < fend ? va + PAGE_SIZE : fend;

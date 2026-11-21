@@ -41,7 +41,7 @@ static void process_tests(void)
     waitpid(run(missing), &st, 0);
     check("execve of missing program fails (child exits 127)", (st >> 8) == 127);
 
-    check("write() with kernel pointer returns -EFAULT", write(1, (const void *)0x80000, 4) == -EFAULT);
+    check("write() with kernel pointer returns -EFAULT", write(1, (const void *)0xffffff8000080000UL, 4) == -EFAULT);
     check("write() to bad fd returns -EBADF", write(9, "x", 1) == -EBADF);
     check("waitpid() with no children returns -ECHILD", waitpid(-1, &st, 0) == -ECHILD);
 

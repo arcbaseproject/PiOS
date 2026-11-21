@@ -52,10 +52,10 @@ void kernel_main(void)
         panic("unexpected ARM RAM base %x", mbase);
 
     mmu_init(msize);
-    kprintf("[MEM] MMU on: identity map, caches enabled\n");
+    kprintf("[MEM] MMU on: kernel at %lx (TTBR1), caches enabled\n", KERNEL_VA);
     fbcon_init();
 
-    page_init((uintptr_t)__stack_top, msize);
+    page_init((uintptr_t)__stack_top, (uintptr_t)P2V(msize));
     page_selftest();
     kprintf("[MEM] Page allocator: %lu free pages (%lu MiB)\n",
             page_free_count(), page_free_count() * PAGE_SIZE >> 20);
