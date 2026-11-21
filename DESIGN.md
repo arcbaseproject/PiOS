@@ -217,6 +217,16 @@
   cache maintenance. uart_putc feeds every byte to fbcon, so kernel and user
   output appear on both; input is still serial only. Font: 8x16 rasterized
   from DejaVu Sans Mono by tools/mkfont.py. Scrolling copies the screen.
+- **USB keyboard**: DWC2 at 0x3F980000, powered via mailbox (device 3),
+  forced into host mode with buffer DMA (bus address = phys | 0xC0000000,
+  cache cleaned/invalidated around each transfer). No USB IRQ: a kernel
+  thread waits for a root-port connection, enumerates the device (and, for a
+  hub, devices on its ports, rescanning ports whose connection changed), then
+  polls the keyboard's interrupt endpoint every 10 ms with HID boot reports.
+  New key presses become console_input() bytes, arrows etc. as VT100
+  sequences, so programs cannot tell it from serial input. Repeat: 500 ms,
+  then 25/s. No split transactions: a low/full-speed keyboard behind a USB 2.0
+  hub does not work. US layout, no LEDs.
 - **C library for ports** (userland/libc, linked as an archive): stdio
   (buffered FILE over fds, stdout line-buffered and flushed by exit() via
   `__exit_hook`), strtod/strtol, string/ctype extras, "C" locale only,

@@ -1,3 +1,4 @@
+#include "usb.h"
 #include "fbcon.h"
 #include "exception.h"
 #include "kernel.h"
@@ -62,6 +63,7 @@ void kernel_main(void)
     sched_init();
     vfs_init();
     proc_create_init();
+    usb_init();
 
     timer_init();
     irq_enable();

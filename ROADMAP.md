@@ -79,6 +79,7 @@
 - [x] sh line editing (arrows, Home/End, Delete) and 16-entry up/down history
 - [x] Signal handlers: sigaction/sigreturn, libc signal(), SIG_IGN, signal blocked during its handler
 - [x] HDMI text console: 640x480 framebuffer, 80x30, mirrors the serial console (VT100 subset)
+- [x] USB keyboard: DWC2 host (polled, DMA), one hub level, HID boot protocol, key repeat
 - [x] Lua 5.4.7 as /bin/lua, on a new C library subset (stdio, float printf/strtod, libm, setjmp, time)
 - [x] init test suite: 67/67 pass in QEMU raspi3b
 - [ ] Verified on real Pi Zero 2 W

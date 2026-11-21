@@ -32,8 +32,13 @@ Leave adapter VCC unconnected; power the Pi via USB. Then:
 
     picocom -b 115200 /dev/ttyUSB0
 
-Output also appears on HDMI (640x480 text console). Typing still goes through
-the serial adapter: there is no USB keyboard support.
+Output also appears on HDMI (640x480 text console). A USB keyboard on the OTG
+port (directly, or behind a USB 1.1 hub) types into the same console; a
+keyboard behind a USB 2.0 hub is not supported yet. With HDMI and a keyboard
+the serial adapter is optional.
+
+QEMU with a USB keyboard: add `-device usb-kbd` (the Pi model puts it behind
+a hub) and type with the monitor's `sendkey`.
 
 Expected (QEMU shown; real Pi reports ~448-500 MiB RAM and 19200000 Hz timer):
 

@@ -62,3 +62,20 @@ long sys_clock_gettime(int clk, uint64_t uts)
 }
 
 uint64_t timer_ticks(void) { return ticks; }
+
+void msleep(unsigned ms)
+{
+    uint64_t daif = read_sysreg(daif);
+    irq_disable();                          // sleep_on wants IRQs masked
+    uint64_t end = ticks + (ms + 1000 / HZ - 1) / (1000 / HZ) + 1;
+    while (ticks < end)
+        sleep_on((void *)&ticks);
+    write_sysreg(daif, daif);
+}
+
+void udelay(unsigned us)
+{
+    uint64_t f = read_sysreg(cntfrq_el0), end = read_sysreg(cntpct_el0) + f * us / 1000000;
+    while (read_sysreg(cntpct_el0) < end)
+        ;
+}

@@ -16,7 +16,8 @@ SRCS := arch/aarch64/boot/start.S arch/aarch64/exception/vectors.S \
         kernel/process/proc.c kernel/process/elf.c mm/kmalloc.c \
         fs/vfs/vfs.c fs/vfs/sysfile.c fs/vfs/pipe.c fs/ramfs/ramfs.c fs/devfs/devfs.c \
         kernel/process/initrd.S kernel/syscall/syscall.c \
-        drivers/sd/emmc.c fs/fat/fat32.c drivers/fb/fbcon.c drivers/fb/font.c
+        drivers/sd/emmc.c fs/fat/fat32.c drivers/fb/fbcon.c drivers/fb/font.c \
+        drivers/usb/dwc2.c
 OBJS := $(patsubst %,build/%.o,$(SRCS))
 
 # Userland: static ELFs linked at USER_BASE, embedded via kernel/process/initrd.S.

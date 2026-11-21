@@ -98,3 +98,18 @@ int mbox_framebuffer(uint32_t w, uint32_t h, uint32_t *pa, uint32_t *size, uint3
     *pitch = buf[28];
     return 0;
 }
+
+int mbox_power_on(uint32_t id)
+{
+    buf[0] = 8 * 4;
+    buf[1] = 0;
+    buf[2] = 0x00028001;    // tag: set power state
+    buf[3] = 8;
+    buf[4] = 0;
+    buf[5] = id;
+    buf[6] = 3;             // on, wait
+    buf[7] = 0;
+    if (mbox_call() != 0 || !(buf[4] & 0x80000000u) || !(buf[6] & 1))
+        return -1;
+    return 0;
+}
