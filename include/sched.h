@@ -28,6 +28,9 @@ struct task {
     int pid;
     int pgid;                   // process group (console ^C target)
     int killed;                 // pending fatal signal, acted on at return to EL0
+    uint32_t sigpend, sigmask;  // caught signals pending / blocked (bit = 1 << sig)
+    uint64_t sighand[32];       // SIG_DFL, SIG_IGN or user handler address
+    uint64_t sigrestorer;       // user code that calls sigreturn
     char name[16];
     void *kstack;               // one page; NULL for idle, and for zombies once switched out
     uint64_t *pgd;              // user page table; NULL = kernel thread
@@ -48,7 +51,7 @@ struct task *task_alloc(const char *name);
 void task_release(struct task *t);
 int kthread_create(void (*fn)(void *), void *arg, const char *name);
 void schedule(void);
-int sleep_on(void *chan);    // -EINTR if killed (caller must bail out)
+int sleep_on(void *chan);    // -EINTR if killed or a caught signal is pending (caller must bail out)
 void wakeup(void *chan);
 _Noreturn void task_exit(void);
 struct task *current_task(void);

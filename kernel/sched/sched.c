@@ -129,16 +129,16 @@ void schedule(void)
 }
 
 // Block until wakeup(chan). Call with IRQs masked; recheck the condition after.
-// Returns -EINTR without sleeping, or on wake, if a fatal signal is pending.
+// Returns -EINTR without sleeping, or on wake, if a signal is pending.
 int sleep_on(void *chan)
 {
-    if (current->killed)
+    if (current->killed || (current->sigpend & ~current->sigmask))
         return -EINTR;
     current->wchan = chan;
     current->state = TASK_WAITING;
     schedule();
     current->wchan = NULL;
-    return current->killed ? -EINTR : 0;
+    return current->killed || (current->sigpend & ~current->sigmask) ? -EINTR : 0;
 }
 
 void wakeup(void *chan)

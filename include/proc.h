@@ -39,3 +39,6 @@ long sys_getprocs(uint64_t ubuf, int max);
 long sys_tcsetpgrp(int pgid);
 long sys_ttymode(int mode);
 void kill_pgrp(int pgid, int sig);
+long sys_sigaction(int sig, uint64_t handler, uint64_t restorer);
+long sys_sigreturn(struct trap_frame *tf);
+void signal_deliver(struct trap_frame *tf);     // on return to EL0: exit if killed, else enter a handler

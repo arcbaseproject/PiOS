@@ -116,6 +116,10 @@ static long exec_image(struct task *t, struct trap_frame *tf, const char *path,
     set_task_name(t, base);
 
     t->brk_base = t->brk = t->brk_mapped = img_top;
+    for (int i = 0; i < 32; i++)        // handlers point into the old image; ignores survive (POSIX)
+        if (t->sighand[i] != SIG_IGN)
+            t->sighand[i] = SIG_DFL;
+    t->sigpend = 0;
     memset(&t->fp, 0, sizeof t->fp);
     if (t == current_task())
         fpsimd_load(&t->fp);
@@ -198,6 +202,8 @@ long sys_fork(struct trap_frame *tf)
     c->ctx.sp = (uintptr_t)ctf;
     c->parent = p;
     c->pgid = p->pgid;
+    c->sigmask = p->sigmask, c->sigrestorer = p->sigrestorer;
+    memcpy(c->sighand, p->sighand, sizeof c->sighand);
     c->brk_base = p->brk_base, c->brk = p->brk, c->brk_mapped = p->brk_mapped;
     for (int i = 0; i < NFD; i++)
         if ((c->fd[i] = p->fd[i]))
@@ -292,7 +298,12 @@ static void signal_task(struct task *t, int sig)
 {
     if (!t->pgd || t->state == TASK_ZOMBIE || t->state == TASK_UNUSED || t == init_task)
         return;
-    if (!t->killed)
+    uint64_t h = sig == SIGKILL ? SIG_DFL : t->sighand[sig];
+    if (h == SIG_IGN)
+        return;
+    if (h != SIG_DFL)
+        t->sigpend |= 1u << sig;
+    else if (!t->killed)
         t->killed = sig;
     if (t->state == TASK_WAITING && t->wchan)
         t->state = TASK_RUNNABLE;   // sleep_on returns -EINTR
@@ -375,4 +386,68 @@ long sys_brk(uint64_t addr)
             return (long)t->brk;
     t->brk = addr;
     return (long)addr;
+}
+
+// ---- signal handlers ----
+// Delivery pushes a sigframe on the user stack and enters the handler with
+// x0 = sig, lr = restorer; the restorer's sigreturn pops the frame. The
+// signal stays blocked while its handler runs.
+// shortcut: no SA_RESTART, siginfo or alternate stack; syscalls interrupted by a caught signal return -EINTR.
+
+struct sigframe {
+    struct fpstate fp;
+    struct trap_frame tf;
+    uint32_t mask;              // sigmask to restore
+};
+
+long sys_sigaction(int sig, uint64_t handler, uint64_t restorer)
+{
+    struct task *t = current_task();
+    if (sig < 1 || sig > 31 || sig == SIGKILL)
+        return -EINVAL;
+    uint64_t old = t->sighand[sig];
+    t->sighand[sig] = handler;
+    if (handler > SIG_IGN)
+        t->sigrestorer = restorer;
+    t->sigpend &= ~(1u << sig);
+    return (long)old;
+}
+
+// Called on every return to EL0 with tf = the frame about to be restored.
+void signal_deliver(struct trap_frame *tf)
+{
+    struct task *t = current_task();
+    if (t->killed)
+        do_exit(t->killed);
+    uint32_t ready = t->sigpend & ~t->sigmask;
+    if (!ready)
+        return;
+    int sig = __builtin_ctz(ready);
+    t->sigpend &= ~(1u << sig);
+    uint64_t sp = (tf->sp_el0 - sizeof(struct sigframe)) & ~15ul;
+    if (t->sighand[sig] <= SIG_IGN || !vm_check(t->pgd, sp, sizeof(struct sigframe), 1))
+        do_exit(SIGSEGV);       // no handler any more, or no room for the frame
+    struct sigframe *f = (struct sigframe *)sp;
+    fpsimd_save(&f->fp);        // user FP state is still live in the registers
+    f->tf = *tf;
+    f->mask = t->sigmask;
+    t->sigmask |= 1u << sig;
+    tf->x[0] = (uint64_t)sig;
+    tf->x[30] = t->sigrestorer;
+    tf->elr = t->sighand[sig];
+    tf->sp_el0 = sp;
+}
+
+long sys_sigreturn(struct trap_frame *tf)
+{
+    struct task *t = current_task();
+    uint64_t sp = tf->sp_el0;
+    if ((sp & 15) || !vm_check(t->pgd, sp, sizeof(struct sigframe), 0))
+        do_exit(SIGSEGV);
+    struct sigframe *f = (struct sigframe *)sp;
+    *tf = f->tf;
+    tf->spsr &= 0xf0000000;     // user may only restore NZCV: stay in EL0t, IRQs on
+    t->sigmask = f->mask & ~(1u << SIGKILL);
+    fpsimd_load(&f->fp);
+    return (long)tf->x[0];      // dispatcher writes this back into x0
 }

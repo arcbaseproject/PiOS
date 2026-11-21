@@ -39,6 +39,8 @@ long syscall_dispatch(struct trap_frame *tf)
     case SYS_nanosleep: return sys_nanosleep(a[0]);
     case SYS_clock_gettime: return sys_clock_gettime((int)a[0], a[1]);
     case SYS_ttymode: return sys_ttymode((int)a[0]);
+    case SYS_sigaction: return sys_sigaction((int)a[0], a[1], a[2]);
+    case SYS_sigreturn: return sys_sigreturn(tf);
     case SYS_getpid:  return current_task()->pid;
     case SYS_execve:  return sys_execve(tf, a[0], a[1], a[2]);
     case SYS_waitpid: return sys_waitpid((int)a[0], a[1], (int)a[2]);

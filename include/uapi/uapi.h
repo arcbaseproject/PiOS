@@ -38,6 +38,10 @@
 #define SYS_ttymode  30     /* ttymode(TTY_RAW|TTY_COOKED): console line discipline; raw passes every byte (incl. ^C), no echo */
 #define TTY_COOKED 0
 #define TTY_RAW    1
+#define SYS_sigaction 31    /* sigaction(sig, handler, restorer) -> old handler; restorer must call sigreturn */
+#define SYS_sigreturn 32    /* restore the context saved when the handler was entered */
+#define SIG_DFL 0           /* default action: terminate */
+#define SIG_IGN 1
 
 /* errno values (Linux-compatible numbering) */
 #define EPERM   1
@@ -74,7 +78,9 @@
 #define SIGINT  2
 #define SIGILL  4
 #define SIGKILL 9
+#define SIGUSR1 10
 #define SIGSEGV 11
+#define SIGUSR2 12
 #define SIGTERM 15
 
 /* open() flags (Linux numbering) */
