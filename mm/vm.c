@@ -143,3 +143,14 @@ void icache_inval_all(void)
 {
     __asm__ volatile("ic ialluis; dsb ish; isb" ::: "memory");
 }
+
+// Unmap one user page (if mapped) and free it.
+void vm_unmap(uint64_t *pgd, uint64_t va)
+{
+    uint64_t *pte = vm_walk(pgd, va, 0);
+    if (!pte || !(*pte & PTE_VALID))
+        return;
+    page_free(P2V(PTE_ADDR(*pte)));
+    *pte = 0;
+    __asm__ volatile("dsb ishst; tlbi vmalle1; dsb ish; isb" ::: "memory");
+}

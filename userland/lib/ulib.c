@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include "ulib.h"
 
 size_t strlen(const char *s)
@@ -154,10 +155,68 @@ void err(const char *who, const char *what, long e)
 }
 
 extern char __sigtramp[];
+long __rt_sigaction(int sig, const struct k_sigaction *act, struct k_sigaction *old, size_t size);
 
 sighandler_t signal(int sig, sighandler_t h)
 {
-    return (sighandler_t)sigaction(sig, (void *)h, __sigtramp);
+    struct k_sigaction act = { (uint64_t)h, SA_RESTORER, (uint64_t)__sigtramp, 0 }, old;
+    long r = __rt_sigaction(sig, &act, &old, 8);
+    return r < 0 ? (sighandler_t)r : (sighandler_t)old.handler;
+}
+
+// ---- POSIX-style calls built on the Linux *at() / clone / wait4 syscalls ----
+long __clone(unsigned long flags, void *stack, void *ptid, void *tls, void *ctid);
+long __wait4(int pid, int *status, int options, void *rusage);
+long __openat(int dirfd, const char *path, int flags, int mode);
+long __fstatat(int dirfd, const char *path, struct stat *st, int flags);
+long __dup3(int fd, int nfd, int flags);
+long __fcntl(int fd, int cmd, long arg);
+long __pipe2(int fds[2], int flags);
+long __mkdirat(int dirfd, const char *path, int mode);
+long __unlinkat(int dirfd, const char *path, int flags);
+long __renameat(int od, const char *o, int nd, const char *n);
+
+int fork(void) { return (int)__clone(SIGCHLD, 0, 0, 0, 0); }
+int waitpid(int pid, int *st, int options) { return (int)__wait4(pid, st, options, 0); }
+int stat(const char *path, struct stat *st) { return (int)__fstatat(AT_FDCWD, path, st, 0); }
+int pipe(int fds[2]) { return (int)__pipe2(fds, 0); }
+int mkdir(const char *path, int mode) { return (int)__mkdirat(AT_FDCWD, path, mode); }
+int unlink(const char *path) { return (int)__unlinkat(AT_FDCWD, path, 0); }
+int rmdir(const char *path) { return (int)__unlinkat(AT_FDCWD, path, AT_REMOVEDIR); }
+int rename(const char *a, const char *b) { return (int)__renameat(AT_FDCWD, a, AT_FDCWD, b); }
+long __symlinkat(const char *target, int dirfd, const char *path);
+long __readlinkat(int dirfd, const char *path, char *buf, size_t size);
+int symlink(const char *target, const char *path) { return (int)__symlinkat(target, AT_FDCWD, path); }
+long readlink(const char *path, char *buf, size_t size) { return __readlinkat(AT_FDCWD, path, buf, size); }
+
+int open(const char *path, int flags, ...)
+{
+    va_list ap;
+    va_start(ap, flags);
+    int mode = (flags & O_CREAT) ? va_arg(ap, int) : 0;
+    va_end(ap);
+    return (int)__openat(AT_FDCWD, path, flags, mode);
+}
+
+int dup2(int fd, int nfd)
+{
+    if (fd == nfd)
+        return __fcntl(fd, F_GETFD, 0) < 0 ? -EBADF : nfd;
+    return (int)__dup3(fd, nfd, 0);
+}
+
+int tcsetpgrp(int pgid) { return ioctl(0, TIOCSPGRP, &pgid); }
+int fcntl(int fd, int cmd, long arg) { return (int)__fcntl(fd, cmd, arg); }
+
+int ttymode(int mode)
+{
+    struct ktermios t;
+    int r = ioctl(0, TCGETS, &t);
+    if (r < 0)
+        return r;
+    t.c_lflag = mode == TTY_RAW ? t.c_lflag & ~(uint32_t)(ICANON | ECHO | ISIG)
+                                : t.c_lflag | ICANON | ECHO | ISIG;
+    return ioctl(0, TCSETS, &t);
 }
 
 void (*__exit_hook)(void);

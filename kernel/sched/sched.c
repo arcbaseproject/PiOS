@@ -122,6 +122,8 @@ void schedule(void)
             vm_activate(next->pgd);
         fpsimd_save(&prev->fp);
         fpsimd_load(&next->fp);
+        prev->tpidr = read_sysreg(tpidr_el0);   // musl keeps its thread pointer here
+        write_sysreg(tpidr_el0, next->tpidr);
         cpu_switch(&prev->ctx, &next->ctx);
         schedule_tail();
     }

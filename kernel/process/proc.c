@@ -67,16 +67,21 @@ static long exec_image(struct task *t, struct trap_frame *tf, const char *path,
         return -EACCES;
     }
 
-    // Stack top page holds strings then the argv/envp pointer arrays below them.
+    // Linux initial stack, all in the top stack page: from sp up, argc, argv[],
+    // NULL, envp[], NULL, auxv pairs, AT_NULL; then 16 AT_RANDOM bytes and the
+    // strings at the very top.
+    enum { NAUX = 10 };
     uint64_t str_va = USER_STACK_TOP - used;
-    uint64_t ptr_va = (str_va - (uint64_t)(argc + envc + 2) * 8) & ~15UL;
-    uint64_t *pgd = ptr_va < USER_STACK_TOP - PAGE_SIZE ? NULL : vm_new();
+    uint64_t rnd_va = (str_va - 16) & ~15UL;
+    uint64_t words = 1 + (uint64_t)(argc + 1) + (uint64_t)(envc + 1) + 2 * NAUX;
+    uint64_t sp = (rnd_va - words * 8) & ~15UL;
+    uint64_t *pgd = sp < USER_STACK_TOP - PAGE_SIZE ? NULL : vm_new();
     if (!pgd) {
         iput(ino);
-        return ptr_va < USER_STACK_TOP - PAGE_SIZE ? -E2BIG : -ENOMEM;
+        return sp < USER_STACK_TOP - PAGE_SIZE ? -E2BIG : -ENOMEM;
     }
-    uint64_t entry, img_top;
-    err = elf_load(pgd, ino, &entry, &img_top);
+    struct elf_info ei;
+    err = elf_load(pgd, ino, &ei);
     iput(ino);
     uint8_t *top = NULL;
     for (uint64_t va = USER_STACK_BASE; err == 0 && va < USER_STACK_TOP; va += PAGE_SIZE)
@@ -90,18 +95,31 @@ static long exec_image(struct task *t, struct trap_frame *tf, const char *path,
     // top = kernel alias of the highest stack page; user va -> kernel pointer.
 #define STACK_K(va) (top + ((va) - (USER_STACK_TOP - PAGE_SIZE)))
     memcpy(STACK_K(str_va), kbuf, used);
-    uint64_t *ptrs = (uint64_t *)STACK_K(ptr_va);
+    uint64_t *rnd = (uint64_t *)STACK_K(rnd_va);
+    uint64_t *w = (uint64_t *)STACK_K(sp);
 #undef STACK_K
+    // shortcut: AT_RANDOM from the cycle counter, not a CSPRNG; musl only seeds its stack canary.
+    uint64_t c = read_sysreg(cntpct_el0);
+    rnd[0] = c * 0x9E3779B97F4A7C15ul;
+    rnd[1] = (c ^ (uint64_t)t->pid << 32) * 0xC2B2AE3D27D4EB4Ful;
+    *w++ = (uint64_t)argc;
     uint64_t s = str_va;
     for (long i = 0; i < argc + envc; i++) {
         if (i == argc)
-            *ptrs++ = 0;    // argv terminator
-        *ptrs++ = s;
+            *w++ = 0;       // argv terminator
+        *w++ = s;
         s += strlen(kbuf + (s - str_va)) + 1;
     }
     if (envc == 0)
-        *ptrs++ = 0;        // argv terminator (loop never reached i == argc)
-    *ptrs = 0;              // envp terminator
+        *w++ = 0;           // argv terminator (loop never reached i == argc)
+    *w++ = 0;               // envp terminator
+    const uint64_t aux[NAUX][2] = {
+        { 3, ei.phdr }, { 4, 56 }, { 5, ei.phnum },     // AT_PHDR, AT_PHENT, AT_PHNUM
+        { 6, PAGE_SIZE }, { 9, ei.entry },              // AT_PAGESZ, AT_ENTRY
+        { 11, 0 }, { 12, 0 }, { 16, 3 },                // AT_UID, AT_EUID, AT_HWCAP (fp, asimd)
+        { 25, rnd_va }, { 0, 0 },                       // AT_RANDOM, AT_NULL
+    };
+    memcpy(w, aux, sizeof aux);
 
     uint64_t *old = t->pgd;
     t->pgd = pgd;
@@ -115,22 +133,31 @@ static long exec_image(struct task *t, struct trap_frame *tf, const char *path,
             base = c + 1;
     set_task_name(t, base);
 
-    t->brk_base = t->brk = t->brk_mapped = img_top;
-    for (int i = 0; i < 32; i++)        // handlers point into the old image; ignores survive (POSIX)
+    t->brk_base = t->brk = t->brk_mapped = ei.top;
+    t->mmap_low = USER_STACK_BASE - PAGE_SIZE;     // one guard page below the stack
+    for (int i = 0; i < 32; i++) {      // handlers point into the old image; ignores survive (POSIX)
         if (t->sighand[i] != SIG_IGN)
             t->sighand[i] = SIG_DFL;
+        t->sigflags[i] = t->sigactmask[i] = 0;
+    }
     t->sigpend = 0;
+    for (int i = 0; i < NFD; i++)
+        if (t->fd[i] && t->cloexec[i]) {
+            file_put(t->fd[i]);
+            t->fd[i] = NULL;
+        }
+    memset(t->cloexec, 0, sizeof t->cloexec);
     memset(&t->fp, 0, sizeof t->fp);
-    if (t == current_task())
+    t->tpidr = 0;
+    if (t == current_task()) {
         fpsimd_load(&t->fp);
+        write_sysreg(tpidr_el0, 0);
+    }
     memset(tf, 0, sizeof *tf);
-    tf->elr = entry;
+    tf->elr = ei.entry;
     tf->spsr = 0;           // EL0t, interrupts unmasked
-    tf->sp_el0 = ptr_va;
-    tf->x[0] = (uint64_t)argc;
-    tf->x[1] = ptr_va;
-    tf->x[2] = ptr_va + (uint64_t)(argc + 1) * 8;
-    return argc;            // dispatcher stores this in x0, which must be argc
+    tf->sp_el0 = sp;
+    return 0;               // dispatcher stores this in x0 (Linux: 0 at entry)
 }
 
 long sys_execve(struct trap_frame *tf, uint64_t upath, uint64_t uargv, uint64_t uenvp)
@@ -179,6 +206,7 @@ void proc_create_init(void)
     t->ctx.lr = (uintptr_t)ret_from_fork;
     t->ctx.sp = (uintptr_t)tf;
     t->pgid = t->pid;
+    t->umask = 022;
     t->state = TASK_RUNNABLE;
     init_task = t;
     kprintf("[PROC] init created, pid %d\n", t->pid);
@@ -204,7 +232,13 @@ long sys_fork(struct trap_frame *tf)
     c->pgid = p->pgid;
     c->sigmask = p->sigmask, c->sigrestorer = p->sigrestorer;
     memcpy(c->sighand, p->sighand, sizeof c->sighand);
+    memcpy(c->sigflags, p->sigflags, sizeof c->sigflags);
+    memcpy(c->sigactmask, p->sigactmask, sizeof c->sigactmask);
+    c->tpidr = read_sysreg(tpidr_el0);     // parent's live thread pointer
     c->brk_base = p->brk_base, c->brk = p->brk, c->brk_mapped = p->brk_mapped;
+    c->mmap_low = p->mmap_low;
+    c->umask = p->umask;
+    memcpy(c->cloexec, p->cloexec, sizeof c->cloexec);
     for (int i = 0; i < NFD; i++)
         if ((c->fd[i] = p->fd[i]))
             c->fd[i]->refs++;
@@ -213,6 +247,8 @@ long sys_fork(struct trap_frame *tf)
     c->state = TASK_RUNNABLE;
     return c->pid;
 }
+
+static void signal_task(struct task *t, int sig);
 
 _Noreturn void do_exit(int status)
 {
@@ -250,8 +286,10 @@ _Noreturn void do_exit(int status)
     }
     t->exit_status = status;
     t->state = TASK_ZOMBIE;
-    if (t->parent)
+    if (t->parent) {
+        signal_task(t->parent, SIGCHLD);
         wakeup(t->parent);
+    }
     if (t == init_task) {
         // All user memory is back by now; only init's own kernel stack is outstanding.
         kprintf("[KERNEL] init exited, status %d, free pages %lu (+1 kstack pending)\n",
@@ -262,18 +300,22 @@ _Noreturn void do_exit(int status)
     panic("zombie rescheduled");
 }
 
-long sys_waitpid(int pid, uint64_t ustatus, int options)
+// wait4(pid, status, options, rusage): pid > 0 that child, -1 any child, 0 our
+// process group, < -1 group -pid. WNOHANG honoured; other options ignored (no
+// stopped children exist); rusage is not filled.
+long sys_wait4(int pid, uint64_t ustatus, int options)
 {
     struct task *self = current_task();
-    if (options != 0)
-        return -EINVAL;
     if (ustatus && !vm_check(self->pgd, ustatus, sizeof(int), 1))
         return -EFAULT;
     for (;;) {
         int have = 0;
         for (int i = 1; i < MAX_TASKS; i++) {
             struct task *c = &tasks[i];
-            if (c->state == TASK_UNUSED || c->parent != self || (pid != -1 && c->pid != pid))
+            if (c->state == TASK_UNUSED || c->parent != self)
+                continue;
+            if (pid > 0 ? c->pid != pid : pid == 0 ? c->pgid != self->pgid :
+                pid < -1 ? c->pgid != -pid : 0)
                 continue;
             have = 1;
             if (c->state == TASK_ZOMBIE) {
@@ -288,6 +330,8 @@ long sys_waitpid(int pid, uint64_t ustatus, int options)
         }
         if (!have)
             return -ECHILD;
+        if (options & WNOHANG)
+            return 0;
         if (sleep_on(self)) // woken by do_exit of a child
             return -EINTR;
     }
@@ -299,7 +343,10 @@ static void signal_task(struct task *t, int sig)
     if (!t->pgd || t->state == TASK_ZOMBIE || t->state == TASK_UNUSED || t == init_task)
         return;
     uint64_t h = sig == SIGKILL ? SIG_DFL : t->sighand[sig];
-    if (h == SIG_IGN)
+    // Default action "ignore" (and the stop signals: no job stopping, so ignored too).
+    uint32_t dfl_ign = 1u << SIGCHLD | 1u << SIGCONT | 1u << SIGURG | 1u << SIGWINCH |
+                       1u << SIGSTOP | 1u << SIGTSTP | 1u << SIGTTIN | 1u << SIGTTOU;
+    if (h == SIG_IGN || (h == SIG_DFL && (dfl_ign >> sig & 1)))
         return;
     if (h != SIG_DFL)
         t->sigpend |= 1u << sig;
@@ -316,20 +363,29 @@ void kill_pgrp(int pgid, int sig)
             signal_task(&tasks[i], sig);
 }
 
+// kill(pid, sig): pid > 0 one process, 0 our group, -1 everyone but init and
+// us, < -1 group -pid. sig 0 only checks existence.
 long sys_kill(int pid, int sig)
 {
-    if (sig < 1 || sig > 31)
+    if (sig < 0 || sig > 31)
         return -EINVAL;
+    struct task *self = current_task();
+    int found = 0;
     for (int i = 1; i < MAX_TASKS; i++) {
         struct task *t = &tasks[i];
-        if (t->state == TASK_UNUSED || t->pid != pid)
+        if (t->state == TASK_UNUSED || t->state == TASK_ZOMBIE || !t->pgd)
             continue;
-        if (t == init_task || !t->pgd)
+        int match = pid > 0 ? t->pid == pid : pid == 0 ? t->pgid == self->pgid :
+                    pid == -1 ? t != self && t != init_task : t->pgid == -pid;
+        if (!match)
+            continue;
+        if (pid > 0 && t == init_task)
             return -EPERM;
-        signal_task(t, sig);
-        return 0;
+        found = 1;
+        if (sig)
+            signal_task(t, sig);
     }
-    return -ESRCH;
+    return found ? 0 : -ESRCH;
 }
 
 long sys_setpgid(int pid, int pgid)
@@ -379,7 +435,7 @@ long sys_getprocs(uint64_t ubuf, int max)
 long sys_brk(uint64_t addr)
 {
     struct task *t = current_task();
-    if (addr < t->brk_base || addr > USER_STACK_BASE - PAGE_SIZE)
+    if (addr < t->brk_base || addr > t->mmap_low - PAGE_SIZE)    // guard page below mmaps
         return (long)t->brk;
     for (; t->brk_mapped < addr; t->brk_mapped += PAGE_SIZE)
         if (!vm_alloc_page(t->pgd, t->brk_mapped, VM_NX))
@@ -390,27 +446,75 @@ long sys_brk(uint64_t addr)
 
 // ---- signal handlers ----
 // Delivery pushes a sigframe on the user stack and enters the handler with
-// x0 = sig, lr = restorer; the restorer's sigreturn pops the frame. The
-// signal stays blocked while its handler runs.
-// shortcut: no SA_RESTART, siginfo or alternate stack; syscalls interrupted by a caught signal return -EINTR.
+// x0 = sig (x1 = siginfo, x2 = 0 for SA_SIGINFO), lr = the sa_restorer, which
+// must call rt_sigreturn to pop the frame. The signal and sa_mask stay blocked
+// while the handler runs.
+// shortcut: no SA_RESTART, siginfo carries only si_signo, no ucontext or
+// alternate stack; syscalls interrupted by a caught signal return -EINTR.
 
 struct sigframe {
     struct fpstate fp;
     struct trap_frame tf;
     uint32_t mask;              // sigmask to restore
+    uint32_t pad[3];
+    int32_t siginfo[32];        // si_signo, si_errno, si_code, ... (128 bytes)
 };
 
-long sys_sigaction(int sig, uint64_t handler, uint64_t restorer)
+// Linux sigset bit n-1 = signal n; ours is bit n.
+static uint32_t from_sigset(uint64_t set) { return (uint32_t)(set << 1) & ~(1u << SIGKILL | 1u << SIGSTOP | 1u); }
+static uint64_t to_sigset(uint32_t mask) { return mask >> 1; }
+
+long sys_rt_sigaction(int sig, uint64_t uact, uint64_t uold, uint64_t size)
 {
     struct task *t = current_task();
-    if (sig < 1 || sig > 31 || sig == SIGKILL)
+    if (sig < 1 || sig > 31 || size != 8)
         return -EINVAL;
-    uint64_t old = t->sighand[sig];
-    t->sighand[sig] = handler;
-    if (handler > SIG_IGN)
-        t->sigrestorer = restorer;
-    t->sigpend &= ~(1u << sig);
-    return (long)old;
+    if ((uact && !vm_check(t->pgd, uact, sizeof(struct k_sigaction), 0)) ||
+        (uold && !vm_check(t->pgd, uold, sizeof(struct k_sigaction), 1)))
+        return -EFAULT;
+    struct k_sigaction old = { t->sighand[sig], t->sigflags[sig], t->sigrestorer,
+                               to_sigset(t->sigactmask[sig]) };
+    if (uact) {
+        struct k_sigaction act = *(struct k_sigaction *)uact;
+        if (sig == SIGKILL || sig == SIGSTOP)
+            return -EINVAL;
+        if (act.handler > SIG_IGN && !(act.flags & SA_RESTORER))
+            return -EINVAL;     // no kernel-provided trampoline
+        t->sighand[sig] = act.handler;
+        t->sigflags[sig] = (uint32_t)act.flags;
+        t->sigactmask[sig] = from_sigset(act.mask);
+        if (act.handler > SIG_IGN)
+            t->sigrestorer = act.restorer;
+        if (act.handler == SIG_IGN)
+            t->sigpend &= ~(1u << sig);
+    }
+    if (uold)
+        *(struct k_sigaction *)uold = old;
+    return 0;
+}
+
+long sys_rt_sigprocmask(int how, uint64_t uset, uint64_t uold, uint64_t size)
+{
+    struct task *t = current_task();
+    if (size != 8)
+        return -EINVAL;
+    if ((uset && !vm_check(t->pgd, uset, 8, 0)) || (uold && !vm_check(t->pgd, uold, 8, 1)))
+        return -EFAULT;
+    uint64_t old = to_sigset(t->sigmask);
+    if (uset) {
+        uint32_t m = from_sigset(*(uint64_t *)uset);
+        if (how == SIG_BLOCK)
+            t->sigmask |= m;
+        else if (how == SIG_UNBLOCK)
+            t->sigmask &= ~m;
+        else if (how == SIG_SETMASK)
+            t->sigmask = m;
+        else
+            return -EINVAL;
+    }
+    if (uold)
+        *(uint64_t *)uold = old;
+    return 0;
 }
 
 // Called on every return to EL0 with tf = the frame about to be restored.
@@ -431,14 +535,18 @@ void signal_deliver(struct trap_frame *tf)
     fpsimd_save(&f->fp);        // user FP state is still live in the registers
     f->tf = *tf;
     f->mask = t->sigmask;
-    t->sigmask |= 1u << sig;
+    memset(f->siginfo, 0, sizeof f->siginfo);
+    f->siginfo[0] = sig;
+    t->sigmask |= 1u << sig | t->sigactmask[sig];
     tf->x[0] = (uint64_t)sig;
+    tf->x[1] = t->sigflags[sig] & SA_SIGINFO ? sp + __builtin_offsetof(struct sigframe, siginfo) : 0;
+    tf->x[2] = 0;
     tf->x[30] = t->sigrestorer;
     tf->elr = t->sighand[sig];
     tf->sp_el0 = sp;
 }
 
-long sys_sigreturn(struct trap_frame *tf)
+long sys_rt_sigreturn(struct trap_frame *tf)
 {
     struct task *t = current_task();
     uint64_t sp = tf->sp_el0;
@@ -447,7 +555,120 @@ long sys_sigreturn(struct trap_frame *tf)
     struct sigframe *f = (struct sigframe *)sp;
     *tf = f->tf;
     tf->spsr &= 0xf0000000;     // user may only restore NZCV: stay in EL0t, IRQs on
-    t->sigmask = f->mask & ~(1u << SIGKILL);
+    t->sigmask = f->mask & ~(1u << SIGKILL | 1u << SIGSTOP);
     fpsimd_load(&f->fp);
     return (long)tf->x[0];      // dispatcher writes this back into x0
+}
+
+// ---- memory mappings: anonymous only, carved downward from below the stack ----
+// shortcut: no file mappings (-ENODEV); munmap'd ranges are not reused unless
+// mapped MAP_FIXED; MAP_SHARED is private (fork copies it); mprotect is a no-op;
+// PROT_NONE (musl's guard pages) is simply unmapped.
+
+long sys_mmap(uint64_t addr, uint64_t len, int prot, int flags, int fd, int64_t off)
+{
+    (void)fd, (void)off;
+    struct task *t = current_task();
+    if (!(flags & MAP_ANONYMOUS))
+        return -ENODEV;
+    if (!len || len > USER_STACK_BASE)
+        return -EINVAL;
+    len = (len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    if (flags & MAP_FIXED) {
+        if ((addr & (PAGE_SIZE - 1)) || addr < USER_BASE || addr + len > USER_STACK_BASE - PAGE_SIZE)
+            return -EINVAL;
+        if (!(prot & (PROT_READ | PROT_WRITE | PROT_EXEC))) {     // PROT_NONE guard: leave unmapped
+            for (uint64_t va = addr; va < addr + len; va += PAGE_SIZE)
+                vm_unmap(t->pgd, va);
+            return (long)addr;
+        }
+    } else {
+        addr = t->mmap_low - len;
+        if (t->mmap_low < len || addr < t->brk_mapped + PAGE_SIZE)
+            return -ENOMEM;
+    }
+    uint64_t vmf = (prot & PROT_WRITE ? 0 : VM_RO) | (prot & PROT_EXEC ? 0 : VM_NX);
+    for (uint64_t va = addr; va < addr + len; va += PAGE_SIZE) {
+        vm_unmap(t->pgd, va);           // MAP_FIXED replaces; fresh pages are zeroed
+        if (!vm_alloc_page(t->pgd, va, vmf)) {
+            for (uint64_t u = addr; u < va; u += PAGE_SIZE)
+                vm_unmap(t->pgd, u);
+            return -ENOMEM;
+        }
+    }
+    if (addr < t->mmap_low)
+        t->mmap_low = addr;
+    if (prot & PROT_EXEC)
+        icache_inval_all();
+    return (long)addr;
+}
+
+long sys_munmap(uint64_t addr, uint64_t len)
+{
+    struct task *t = current_task();
+    if ((addr & (PAGE_SIZE - 1)) || addr < USER_BASE || addr + len > USER_STACK_BASE - PAGE_SIZE)
+        return -EINVAL;
+    for (uint64_t va = addr; va < addr + len; va += PAGE_SIZE)
+        vm_unmap(t->pgd, va);
+    return 0;
+}
+
+// clone() for fork and vfork only (no threads). vfork's CLONE_VM is emulated
+// by copying, which is fine for the vfork-then-exec pattern.
+long sys_clone(struct trap_frame *tf, uint64_t flags, uint64_t stack)
+{
+    if ((flags & 0xff) != SIGCHLD || (flags & ~(0xfful | CLONE_VM | CLONE_VFORK)))
+        return -EINVAL;
+    long pid = sys_fork(tf);
+    if (pid > 0 && stack) {
+        for (int i = 1; i < MAX_TASKS; i++)
+            if (tasks[i].pid == pid)
+                task_frame(&tasks[i])->sp_el0 = stack;
+    }
+    return pid;
+}
+
+long sys_uname(uint64_t ubuf)
+{
+    if (!vm_check(current_task()->pgd, ubuf, sizeof(struct utsname), 1))
+        return -EFAULT;
+    struct utsname *u = (struct utsname *)ubuf;
+    memset(u, 0, sizeof *u);
+    memcpy(u->sysname, "PiOS", 5);
+    memcpy(u->nodename, "pios", 5);
+    memcpy(u->release, PIOS_VERSION, sizeof PIOS_VERSION);
+    memcpy(u->version, "#1", 3);
+    memcpy(u->machine, "aarch64", 8);
+    return 0;
+}
+
+long sys_getpgid(int pid)
+{
+    if (pid == 0)
+        return current_task()->pgid;
+    for (int i = 1; i < MAX_TASKS; i++)
+        if (tasks[i].state != TASK_UNUSED && tasks[i].pid == pid)
+            return tasks[i].pgid;
+    return -ESRCH;
+}
+
+long sys_setsid(void)       // no sessions: just a new process group
+{
+    struct task *t = current_task();
+    t->pgid = t->pid;
+    return t->pid;
+}
+
+long sys_getppid(void)
+{
+    struct task *p = current_task()->parent;
+    return p ? p->pid : (init_task ? init_task->pid : 0);
+}
+
+long sys_umask(int mask)
+{
+    struct task *t = current_task();
+    long old = t->umask;
+    t->umask = (uint32_t)mask & 0777;
+    return old;
 }

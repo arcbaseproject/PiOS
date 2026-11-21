@@ -8,6 +8,10 @@ CFLAGS  := -std=c17 -ffreestanding -fno-builtin -nostdlib -mcpu=cortex-a53 \
            -mgeneral-regs-only -mstrict-align -O2 -g -Wall -Wextra -Werror -Iinclude -Iinclude/uapi -MMD -MP
 ASFLAGS := -mcpu=cortex-a53 -Iinclude -Iinclude/uapi -MMD -MP
 
+ifdef STRACE
+CFLAGS += -DSTRACE
+endif
+
 SRCS := arch/aarch64/boot/start.S arch/aarch64/exception/vectors.S \
         arch/aarch64/exception/exception.c arch/aarch64/mmu/mmu.c \
         kernel/main.c drivers/uart/pl011.c drivers/timer/timer.c \

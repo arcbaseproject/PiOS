@@ -69,8 +69,19 @@ read fine. Keep a backup of the boot files: this FAT driver is new.
 
 QEMU with a disk image: `qemu-system-aarch64 -M raspi3b -kernel kernel8.img
 -serial stdio -display none -drive file=sd.img,if=sd,format=raw`
-(image size must be a power of two).
-`|`, `<`, `>`, `>>` and quotes work. ^C kills the running command.
+(image size must be a power of two). `tools/mksdimg.py sd.img [path=file ...]`
+builds one, and `tools/qemu-drive.py` scripts a session (see the files).
+
+### BusyBox (about 300 more commands)
+
+PiOS runs static Linux/AArch64 binaries. Copy Alpine's static BusyBox to the
+card as `bin/busybox` (the `busybox-static` package for aarch64; the binary
+inside is `bin/busybox.static`, GPLv2). At boot, init links every applet into
+/usr/bin, so `ls -l`, `vi`, `grep`, `sed`, `awk`, `find`, `tar`, `sh` (ash) and
+the rest work by name. For QEMU:
+`tools/mksdimg.py sd.img bin/busybox=busybox.static`.
+`|`, `<`, `>`, `>>`, quotes and backslash work in PiOS's own shell; for `;`,
+`&&`, variables and scripts run BusyBox's `sh`. ^C kills the running command.
 
 No output: check TX/RX swap, `config.txt` present, firmware files present.
 Green ACT LED flashing a pattern then nothing = firmware could not find a file.

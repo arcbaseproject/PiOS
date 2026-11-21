@@ -73,6 +73,7 @@
   x0-x5, result x0, negative = -errno. Other registers preserved (whole trap
   frame restored). Implemented: exit(1) fork(2) write(3) getpid(4) execve(5)
   waitpid(6). write() goes to the console for fd 1/2 only until Phase 5.
+  (Phase 9 replaced the numbering with Linux's; see there.)
 - **User pointers**: `vm_check` walks the current table and requires each page
   to be present, EL0-accessible, and writable if needed; then the kernel
   dereferences the user VA directly. Strings copied byte-wise with a check at
@@ -245,3 +246,37 @@
   User stacks are 256 KiB so Lua's C recursion limit (200 levels) fits.
 - **Syscalls added**: brk(27) nanosleep(28) clock_gettime(29) ttymode(30)
   sigaction(31) sigreturn(32).
+
+## Phase 9
+
+- **Linux ABI**: PiOS adopted the Linux/AArch64 syscall interface outright
+  (asm-generic numbers, struct stat/dirent64/termios/sigaction layouts,
+  -errno returns) instead of carrying two ABIs. PiOS's own programs reach it
+  through ulib wrappers (open -> openat(AT_FDCWD), fork -> clone(SIGCHLD),
+  waitpid -> wait4, ttymode/tcsetpgrp -> termios ioctls), so static musl
+  binaries such as Alpine's busybox.static run unmodified. PiOS-only calls
+  live at >= 1000 (getprocs).
+- **Process entry**: Linux initial stack (argc, argv, envp, auxv with
+  AT_PHDR/PHNUM/PAGESZ/ENTRY/RANDOM/HWCAP), registers zero. TPIDR_EL0 is
+  saved per task (musl's thread pointer), copied on fork, cleared on exec.
+- **Coverage**: what BusyBox needs. clone only as fork/vfork (vfork copies
+  instead of sharing memory: fine for vfork+exec); mmap anonymous only
+  (file mappings -> ENODEV), carved downward from below the stack, PROT_NONE
+  pages left unmapped, mprotect a no-op; *at() calls take AT_FDCWD or a
+  directory fd (used as a temporary cwd), renameat only within one dirfd;
+  ppoll re-checks readiness every tick (no wait queues); wait4 honours
+  WNOHANG and pid/pgid selection; signals with default action "ignore"
+  (SIGCHLD, SIGWINCH, ...) and the stop signals are dropped; SIGCHLD is sent
+  on child exit; FD_CLOEXEC/O_CLOEXEC close on exec; sendfile, select,
+  sockets, /proc are missing (ENOSYS), and applets that need them fail.
+- **Symlinks**: ramfs only (FAT refuses with EPERM). Path walks restart at
+  the link target, at most 8 levels (ELOOP). lstat/readlink/symlinkat.
+- **BusyBox**: installed by copying busybox.static to /boot/bin/busybox.
+  init asks `busybox --list` at boot and symlinks each applet into /usr/bin
+  (ramfs), skipping ones that need /proc (ps, uptime, ...) so PiOS's own
+  stay in use; PATH=/usr/bin:/bin:/boot/bin. `make STRACE=1` logs syscalls
+  failing with ENOSYS/EINVAL/ENOTTY/EFAULT when porting more binaries.
+- **Address space**: PiOS programs still link at 0x80000000; Linux binaries
+  load at their ELF addresses (0x400000 for BusyBox). The stack is the top
+  256 KiB below 0xC0000000, mmap grows down beneath it, brk grows up from
+  the image end; each keeps a guard page from the other.

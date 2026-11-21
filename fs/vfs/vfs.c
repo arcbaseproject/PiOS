@@ -34,10 +34,15 @@ void iput(struct inode *ino)
 
 // Resolve path. If `last` is non-NULL, stop before the final component, copy
 // it into `last` and return its directory. Result carries a reference.
-static long walk(const char *path, struct inode **out, char *last)
+#define MAX_LINKS 8
+
+// Resolve path from start. With last != NULL, stop before the final component
+// (copied to last) and return its directory. Symlinks met along the way, and
+// the final one when follow is set, restart the walk at their target.
+static long walk_from(struct inode *start, const char *path, struct inode **out, char *last,
+                      int follow, int depth)
 {
-    struct task *t = current_task();
-    struct inode *cur = (*path == '/' || !t->cwd) ? root : t->cwd;
+    struct inode *cur = *path == '/' ? root : start;
     const char *p = path;
     char comp[NAME_MAX + 1];
     if (!*p)
@@ -73,9 +78,30 @@ static long walk(const char *path, struct inode **out, char *last)
             cur = cur->parent;
             continue;
         }
+        struct inode *dir = cur;
         long r = cur->ops->lookup(cur, comp, &cur);
         if (r < 0)
             return r;
+        if (S_ISLNK(cur->mode) && (*q || follow)) {
+            if (depth >= MAX_LINKS)
+                return -ELOOP;
+            // New path: link target, then whatever followed this component.
+            char *np = kmalloc(PATH_MAX);
+            if (!np)
+                return -ENOMEM;
+            long n = cur->size < PATH_MAX ? cur->ops->read(cur, np, cur->size, 0) : -ENAMETOOLONG;
+            size_t rest = strlen(p);
+            if (n >= 0 && (size_t)n + rest + 1 > PATH_MAX)
+                n = -ENAMETOOLONG;
+            if (n < 0) {
+                kfree(np);
+                return n;
+            }
+            memcpy(np + n, p, rest + 1);
+            r = walk_from(dir, np, out, last, follow, depth + 1);
+            kfree(np);
+            return r;
+        }
     }
     if (last && !S_ISDIR(cur->mode))
         return -ENOTDIR;
@@ -84,8 +110,15 @@ static long walk(const char *path, struct inode **out, char *last)
     return 0;
 }
 
-long vfs_lookup(const char *path, struct inode **out) { return walk(path, out, NULL); }
-long vfs_lookup_parent(const char *path, struct inode **dir, char *name) { return walk(path, dir, name); }
+static long walk(const char *path, struct inode **out, char *last, int follow)
+{
+    struct task *t = current_task();
+    return walk_from(t->cwd ? t->cwd : root, path, out, last, follow, 0);
+}
+
+long vfs_lookup(const char *path, struct inode **out) { return walk(path, out, NULL, 1); }
+long vfs_lookup_nofollow(const char *path, struct inode **out) { return walk(path, out, NULL, 0); }
+long vfs_lookup_parent(const char *path, struct inode **dir, char *name) { return walk(path, dir, name, 0); }
 
 long vfs_create(const char *path, uint32_t mode, struct inode **out)
 {

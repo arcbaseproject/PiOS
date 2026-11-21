@@ -69,11 +69,19 @@ static void pipe_release(struct inode *ino)
     kfree(p);
 }
 
+static int pipe_poll(struct inode *ino)
+{
+    struct pipe *p = ino->priv;
+    return (p->count ? POLLIN : 0) | (!p->writers ? POLLIN | POLLHUP : 0) |
+           (p->count < PAGE_SIZE ? POLLOUT : 0) | (!p->readers ? POLLERR : 0);
+}
+
 static const struct inode_ops pipe_ops = {
     .read = pipe_read, .write = pipe_write, .close = pipe_close, .release = pipe_release,
+    .poll = pipe_poll,
 };
 
-long sys_pipe(uint64_t ufds)
+long sys_pipe2(uint64_t ufds, int flags)
 {
     struct task *t = current_task();
     if (!vm_check(t->pgd, ufds, 2 * sizeof(int), 1))
@@ -108,6 +116,7 @@ long sys_pipe(uint64_t ufds)
         panic("pipe: out of memory for file objects");
     t->fd[rfd] = r;
     t->fd[wfd] = w;
+    t->cloexec[rfd] = t->cloexec[wfd] = (flags & O_CLOEXEC) != 0;
     ((int *)ufds)[0] = rfd;
     ((int *)ufds)[1] = wfd;
     return 0;

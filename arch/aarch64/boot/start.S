@@ -79,7 +79,7 @@ el1_entry:
     orr     x2, x2, x4                  // 1 GiB device block (same attribute bits)
     str     x2, [x1, #8]
 
-    ldr     x2, =0x440000ff             // MAIR: attr0 device nGnRnE, attr1 normal WB, attr2 normal NC
+    ldr     x2, =0x44ff00               // MAIR: attr0 device nGnRnE (0x00), attr1 normal WB (0xff), attr2 normal NC (0x44)
     msr     mair_el1, x2
     ldr     x2, =0x00000000B5193519     // TCR: T0SZ=T1SZ=25, 4 KiB granules, WB-WA inner shareable walks
     msr     tcr_el1, x2

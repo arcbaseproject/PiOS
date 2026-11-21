@@ -14,7 +14,7 @@ static void check(const char *what, int ok)
 
 static int run(char *const argv[])
 {
-    char *env[] = { "HOME=/", "TERM=vt100", 0 };
+    char *env[] = { "HOME=/", "TERM=vt100", "PATH=/usr/bin:/bin:/boot/bin", 0 };
     int pid = fork();
     if (pid == 0) {
         execve(argv[0], argv, env);
@@ -251,13 +251,13 @@ static void fs_tests(void)
 
     // Directory listing of / must contain the standard tree.
     fd = open("/", O_RDONLY);
-    struct dirent de[16];
-    long nb = getdents(fd, de, sizeof de);
+    char db[1024] __attribute__((aligned(8)));
+    long nb = getdents64(fd, db, sizeof db);
     int found = 0;
-    for (long i = 0; i < nb / (long)sizeof *de; i++)
+    for (long off = 0; off < nb; off += ((struct dirent64 *)(db + off))->d_reclen)
         for (const char *const *w = (const char *const[]){ "bin", "dev", "etc", "tmp", ".", "..", 0 }; *w; w++)
-            found += strcmp(de[i].d_name, *w) == 0;
-    check("getdents(/) lists . .. bin dev etc tmp", found == 6);
+            found += strcmp(((struct dirent64 *)(db + off))->d_name, *w) == 0;
+    check("getdents64(/) lists . .. bin dev etc tmp", found == 6);
     close(fd);
 
     check("stat /dev/console is char device", stat("/dev/console", &st) == 0 && (st.st_mode & S_IFMT) == S_IFCHR);
@@ -295,6 +295,110 @@ static void fs_tests(void)
     close(p[1]);
     check("dup() returns lowest free fd", (fd = dup(0)) == 3);
     close(fd);
+
+    // Linux ABI pieces: symlinks, anonymous mmap, close-on-exec, WNOHANG, uname.
+    fd = open("/tmp/target", O_WRONLY | O_CREAT, 0644);
+    write(fd, "via link", 8);
+    close(fd);
+    char lb[32] = { 0 };
+    check("symlink() in ramfs", symlink("/tmp/target", "/tmp/ln") == 0);
+    check("readlink() returns the target", readlink("/tmp/ln", lb, sizeof lb) == 11 && memcmp(lb, "/tmp/target", 11) == 0);
+    fd = open("/tmp/ln", O_RDONLY);
+    memset(lb, 0, sizeof lb);
+    check("open() follows the link", fd >= 0 && read(fd, lb, sizeof lb) == 8 && strcmp(lb, "via link") == 0);
+    close(fd);
+    struct stat ls1, ls2;
+    long l1 = 0;
+    {   // lstat: newfstatat with AT_SYMLINK_NOFOLLOW
+        register long x0 __asm__("x0") = AT_FDCWD;
+        register long x1 __asm__("x1") = (long)"/tmp/ln";
+        register long x2 __asm__("x2") = (long)&ls1;
+        register long x3 __asm__("x3") = AT_SYMLINK_NOFOLLOW;
+        register long x8 __asm__("x8") = SYS_newfstatat;
+        __asm__ volatile("svc #0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x3), "r"(x8) : "memory");
+        l1 = x0;
+    }
+    check("lstat sees the link, stat the file", l1 == 0 && S_ISLNK(ls1.st_mode) &&
+          stat("/tmp/ln", &ls2) == 0 && S_ISREG(ls2.st_mode) && ls2.st_size == 8);
+    check("unlink(link) keeps the target", unlink("/tmp/ln") == 0 && stat("/tmp/target", &ls2) == 0);
+    unlink("/tmp/target");
+
+    char *m = mmap(0, 3 * 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    int zero = (long)m > 0;
+    for (int i = 0; zero && i < 3 * 4096; i++)
+        zero = m[i] == 0;
+    if ((long)m > 0)
+        m[3 * 4096 - 1] = 7;
+    char *m2 = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    check("mmap anonymous: zeroed, writable, distinct", zero && m[3 * 4096 - 1] == 7 && (long)m2 > 0 && m2 + 4096 <= m);
+    check("munmap", munmap(m, 3 * 4096) == 0 && munmap(m2, 4096) == 0);
+
+    int pf[2];
+    check("pipe2(O_CLOEXEC) sets FD_CLOEXEC", __pipe2(pf, O_CLOEXEC) == 0 &&
+          fcntl(pf[0], F_GETFD, 0) == FD_CLOEXEC && fcntl(pf[1], F_GETFD, 0) == FD_CLOEXEC);
+    close(pf[0]);
+    close(pf[1]);
+
+    int cpid = fork(), cst = 0;
+    if (cpid == 0) {
+        struct timespec d = { 0, 100000000 };
+        nanosleep(&d, 0);
+        exit(3);
+    }
+    check("waitpid(WNOHANG) on a running child returns 0", waitpid(cpid, &cst, WNOHANG) == 0);
+    check("then reaps it", waitpid(cpid, &cst, 0) == cpid && cst == W_EXITCODE(3));
+
+    struct utsname u;
+    check("uname: PiOS on aarch64", uname(&u) == 0 && strcmp(u.sysname, "PiOS") == 0 &&
+          strcmp(u.machine, "aarch64") == 0);
+}
+
+// If BusyBox is installed on the card, link each applet into /usr/bin (ramfs,
+// so this runs every boot); PATH puts /usr/bin before PiOS's simpler /bin
+// tools. busybox --install needs /proc/self/exe, so ask it for the list instead.
+static void install_busybox(void)
+{
+    static const char bb[] = "/boot/bin/busybox";
+    struct stat st;
+    int p[2];
+    if (stat(bb, &st) < 0 || pipe(p) < 0)
+        return;
+    int pid = fork();
+    if (pid == 0) {
+        dup2(p[1], 1);
+        close(p[0]);
+        close(p[1]);
+        execve(bb, (char *[]){ "busybox", "--list", 0 }, (char *[]){ 0 });
+        exit(127);
+    }
+    close(p[1]);
+    mkdir("/usr/bin", 0755);
+    char buf[512], name[64], path[80];
+    int n = 0, links = 0;
+    long r;
+    while ((r = read(p[0], buf, sizeof buf)) > 0)
+        for (long i = 0; i < r; i++) {
+            if (buf[i] != '\n') {
+                if (n < (int)sizeof name - 1)
+                    name[n++] = buf[i];
+                continue;
+            }
+            name[n] = 0;
+            n = 0;
+            // Applets that read /proc (absent): keep PiOS's own versions in /bin.
+            static const char *const skip[] = { "ps", "uptime", "top", "free", "pidof", "pgrep",
+                                                "pkill", "killall", "killall5", 0 };
+            int skipped = 0;
+            for (int k = 0; skip[k]; k++)
+                skipped |= strcmp(name, skip[k]) == 0;
+            if (skipped)
+                continue;
+            snprintf(path, sizeof path, "/usr/bin/%s", name);
+            links += symlink(bb, path) == 0;
+        }
+    close(p[0]);
+    waitpid(pid, 0, 0);
+    printf("[init] busybox: %d applets linked into /usr/bin\n", links);
 }
 
 int main(void)
@@ -307,6 +411,7 @@ int main(void)
     signal_tests();
     fs_tests();
     puts(failures ? "[init] SOME TESTS FAILED\n" : "[init] all tests passed\n");
+    install_busybox();
 
     char *sh[] = { "/bin/sh", 0 };
     for (;;) {

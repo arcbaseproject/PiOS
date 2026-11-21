@@ -19,14 +19,15 @@ static int list(const char *path)
         err("ls", path, fd);
         return 1;
     }
-    struct dirent de[16];
+    char buf[1024] __attribute__((aligned(8)));
     long n;
-    while ((n = getdents(fd, de, sizeof de)) > 0)
-        for (long i = 0; i < n / (long)sizeof de[0]; i++) {
-            if (de[i].d_name[0] == '.')
+    while ((n = getdents64(fd, buf, sizeof buf)) > 0)
+        for (long off = 0; off < n; off += ((struct dirent64 *)(buf + off))->d_reclen) {
+            struct dirent64 *de = (struct dirent64 *)(buf + off);
+            if (de->d_name[0] == '.')
                 continue;   // hidden, plus . and ..
-            puts(de[i].d_name);
-            puts(S_ISDIR(de[i].d_mode) ? "/\n" : "\n");
+            puts(de->d_name);
+            puts(de->d_type == DT_DIR ? "/\n" : "\n");
         }
     close(fd);
     if (n < 0) {

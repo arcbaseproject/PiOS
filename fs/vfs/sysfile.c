@@ -3,6 +3,7 @@
 #include "mm.h"
 #include "proc.h"
 #include "sched.h"
+#include "timer.h"
 #include "vfs.h"
 
 static struct file *getf(int fd)
@@ -18,6 +19,7 @@ static int fd_install(struct file *f)
     for (int i = 0; i < NFD; i++)
         if (!t->fd[i]) {
             t->fd[i] = f;
+            t->cloexec[i] = 0;
             return i;
         }
     return -EMFILE;
@@ -29,7 +31,7 @@ static long get_path(char *dst, uint64_t upath)
     return r == -E2BIG ? -ENAMETOOLONG : r;
 }
 
-static int seekable(struct inode *ino) { return S_ISREG(ino->mode); }
+static int seekable(struct inode *ino) { return S_ISREG(ino->mode); }    // offsets advance on read/write
 
 long sys_read(int fd, uint64_t ubuf, uint64_t len)
 {
@@ -70,7 +72,7 @@ long sys_open(uint64_t upath, int flags, int mode)
     struct inode *ino;
     r = vfs_lookup(path, &ino);
     if (r == -ENOENT && (flags & O_CREAT))
-        r = vfs_create(path, S_IFREG | (mode & 0777), &ino);
+        r = vfs_create(path, S_IFREG | (mode & 0777 & ~current_task()->umask), &ino);
     else if (r == 0 && (flags & O_CREAT) && (flags & O_EXCL)) {
         iput(ino);
         r = -EEXIST;
@@ -78,19 +80,25 @@ long sys_open(uint64_t upath, int flags, int mode)
     if (r < 0)
         return r;
     int acc = flags & O_ACCMODE;
+    if ((flags & O_DIRECTORY) && !S_ISDIR(ino->mode)) {
+        iput(ino);
+        return -ENOTDIR;
+    }
     if (S_ISDIR(ino->mode) && acc != O_RDONLY) {
         iput(ino);
         return -EISDIR;
     }
     if ((flags & O_TRUNC) && acc != O_RDONLY && S_ISREG(ino->mode))
         ino->ops->truncate(ino);
-    struct file *f = file_new(ino, flags);
+    struct file *f = file_new(ino, flags & (O_ACCMODE | O_APPEND | O_NONBLOCK));
     iput(ino);
     if (!f)
         return -ENOMEM;
     int fd = fd_install(f);
     if (fd < 0)
         file_put(f);
+    else
+        current_task()->cloexec[fd] = (flags & O_CLOEXEC) != 0;
     return fd;
 }
 
@@ -109,8 +117,8 @@ long sys_lseek(int fd, int64_t off, int whence)
     struct file *f = getf(fd);
     if (!f)
         return -EBADF;
-    if (!seekable(f->ino))
-        return -ESPIPE;
+    if (!seekable(f->ino) && !S_ISDIR(f->ino->mode))
+        return -ESPIPE;     // directories: offset = entry index (rewinddir)
     int64_t base = whence == SEEK_SET ? 0 : whence == SEEK_CUR ? (int64_t)f->off :
                    whence == SEEK_END ? (int64_t)f->ino->size : -1;
     if (base < 0 || base + off < 0)
@@ -124,11 +132,14 @@ static long fill_stat(struct inode *ino, uint64_t ust)
     if (!vm_check(current_task()->pgd, ust, sizeof(struct stat), 1))
         return -EFAULT;
     struct stat *st = (struct stat *)ust;
+    memset(st, 0, sizeof *st);
+    st->st_dev = 1;
     st->st_ino = ino->ino;
     st->st_mode = ino->mode;
-    st->st_nlink = ino->nlink;
-    st->st_pad = 0;
-    st->st_size = S_ISREG(ino->mode) ? ino->size : 0;
+    st->st_nlink = ino->nlink ? ino->nlink : 1;
+    st->st_size = S_ISREG(ino->mode) || S_ISLNK(ino->mode) ? (int64_t)ino->size : 0;
+    st->st_blksize = 4096;
+    st->st_blocks = (st->st_size + 511) / 512;
     return 0;
 }
 
@@ -138,6 +149,18 @@ long sys_stat(uint64_t upath, uint64_t ust)
     struct inode *ino;
     long r = get_path(path, upath);
     if (r < 0 || (r = vfs_lookup(path, &ino)) < 0)
+        return r;
+    r = fill_stat(ino, ust);
+    iput(ino);
+    return r;
+}
+
+long sys_lstat(uint64_t upath, uint64_t ust)
+{
+    char path[PATH_MAX];
+    struct inode *ino;
+    long r = get_path(path, upath);
+    if (r < 0 || (r = vfs_lookup_nofollow(path, &ino)) < 0)
         return r;
     r = fill_stat(ino, ust);
     iput(ino);
@@ -173,6 +196,7 @@ long sys_dup2(int fd, int nfd)
         file_put(t->fd[nfd]);
     f->refs++;
     t->fd[nfd] = f;
+    t->cloexec[nfd] = 0;
     return nfd;
 }
 
@@ -331,7 +355,7 @@ long sys_rename(uint64_t uold, uint64_t unew)
     return r;
 }
 
-long sys_getdents(int fd, uint64_t ubuf, uint64_t len)
+long sys_getdents64(int fd, uint64_t ubuf, uint64_t len)
 {
     struct file *f = getf(fd);
     if (!f)
@@ -341,21 +365,247 @@ long sys_getdents(int fd, uint64_t ubuf, uint64_t len)
     if (!vm_check(current_task()->pgd, ubuf, len, 1))
         return -EFAULT;
     struct inode *dir = f->ino;
-    struct dirent *out = (struct dirent *)ubuf;
-    long n = 0;
-    while ((uint64_t)(n + 1) * sizeof *out <= len) {
+    uint64_t used = 0;
+    for (;;) {
         struct dirent de = {0};
         if (f->off < 2) {           // synthesize "." and ".."
             struct inode *t = f->off ? dir->parent : dir;
-            de.d_ino = t->ino;
+            de.d_ino = t ? t->ino : dir->ino;
             de.d_mode = S_IFDIR;
             memcpy(de.d_name, "..", f->off + 1);
             de.d_name[f->off + 1] = 0;
         } else if (!dir->ops->readdir(dir, f->off - 2, &de)) {
             break;
         }
-        out[n++] = de;
+        size_t nl = strlen(de.d_name);
+        uint64_t rec = (sizeof(struct dirent64) + nl + 1 + 7) & ~7ul;
+        if (used + rec > len)
+            return used ? (long)used : -EINVAL;
+        struct dirent64 *d = (struct dirent64 *)(ubuf + used);
+        d->d_ino = de.d_ino ? de.d_ino : 1;
+        d->d_off = (int64_t)f->off + 1;
+        d->d_reclen = (uint16_t)rec;
+        uint32_t m = de.d_mode & S_IFMT;
+        d->d_type = m == S_IFDIR ? DT_DIR : m == S_IFREG ? DT_REG : m == S_IFCHR ? DT_CHR :
+                    m == S_IFIFO ? DT_FIFO : m == S_IFLNK ? DT_LNK : 0;
+        memcpy(d->d_name, de.d_name, nl + 1);
+        used += rec;
         f->off++;
     }
-    return n * (long)sizeof *out;
+    return (long)used;
+}
+
+// ---- Linux *at() calls: dirfd is AT_FDCWD or a directory fd (used as the
+// cwd for the duration of the call) ----
+
+static long at_enter(int dirfd, struct inode **saved)
+{
+    struct task *t = current_task();
+    *saved = t->cwd;
+    if (dirfd == AT_FDCWD)
+        return 0;
+    struct file *f = getf(dirfd);
+    if (!f)
+        return -EBADF;
+    if (!S_ISDIR(f->ino->mode))
+        return -ENOTDIR;
+    t->cwd = f->ino;            // borrowed: restored before the fd can go away
+    return 0;
+}
+
+static void at_leave(struct inode *saved) { current_task()->cwd = saved; }
+
+#define AT_CALL(dirfd, expr) ({ struct inode *sv_; long r_ = at_enter(dirfd, &sv_); \
+                                if (r_ == 0) { r_ = (expr); at_leave(sv_); } r_; })
+
+long sys_openat(int dirfd, uint64_t upath, int flags, int mode)
+{
+    return AT_CALL(dirfd, sys_open(upath, flags, mode));
+}
+
+long sys_newfstatat(int dirfd, uint64_t upath, uint64_t ust, int flags)
+{
+    char c = 0;
+    if ((flags & 0x1000) && copyin_str(&c, upath, 1) >= 0 && !c)   // AT_EMPTY_PATH, ""
+        return sys_fstat(dirfd, ust);
+    if (flags & AT_SYMLINK_NOFOLLOW)
+        return AT_CALL(dirfd, sys_lstat(upath, ust));
+    return AT_CALL(dirfd, sys_stat(upath, ust));
+}
+
+long sys_mkdirat(int dirfd, uint64_t upath, int mode)
+{
+    return AT_CALL(dirfd, sys_mkdir(upath, mode & ~(int)current_task()->umask));
+}
+
+long sys_unlinkat(int dirfd, uint64_t upath, int flags)
+{
+    return AT_CALL(dirfd, flags & AT_REMOVEDIR ? sys_rmdir(upath) : sys_unlink(upath));
+}
+
+long sys_renameat(int olddir, uint64_t uold, int newdir, uint64_t unew)
+{
+    if (olddir != newdir && (olddir != AT_FDCWD || newdir != AT_FDCWD))
+        return -EINVAL;         // shortcut: both names relative to the same directory
+    return AT_CALL(olddir, sys_rename(uold, unew));
+}
+
+long sys_faccessat(int dirfd, uint64_t upath, int mode)
+{
+    (void)mode;                 // no permissions: existence is access
+    char path[PATH_MAX];
+    struct inode *ino;
+    long r = AT_CALL(dirfd, get_path(path, upath) < 0 ? -EFAULT : vfs_lookup(path, &ino));
+    if (r == 0)
+        iput(ino);
+    return r;
+}
+
+long sys_dup3(int fd, int nfd, int flags)
+{
+    if (fd == nfd)
+        return -EINVAL;
+    long r = sys_dup2(fd, nfd);
+    if (r >= 0)
+        current_task()->cloexec[nfd] = (flags & O_CLOEXEC) != 0;
+    return r;
+}
+
+long sys_fcntl(int fd, int cmd, uint64_t arg)
+{
+    struct task *t = current_task();
+    struct file *f = getf(fd);
+    if (!f)
+        return -EBADF;
+    switch (cmd) {
+    case F_DUPFD: case F_DUPFD_CLOEXEC:
+        for (int i = (int)arg; i >= 0 && i < NFD; i++)
+            if (!t->fd[i]) {
+                f->refs++;
+                t->fd[i] = f;
+                t->cloexec[i] = cmd == F_DUPFD_CLOEXEC;
+                return i;
+            }
+        return -EMFILE;
+    case F_GETFD: return t->cloexec[fd] ? FD_CLOEXEC : 0;
+    case F_SETFD: t->cloexec[fd] = (arg & FD_CLOEXEC) != 0; return 0;
+    case F_GETFL: return f->flags;
+    case F_SETFL: f->flags = (f->flags & ~(O_APPEND | O_NONBLOCK)) | ((int)arg & (O_APPEND | O_NONBLOCK)); return 0;
+    }
+    return -EINVAL;
+}
+
+long sys_ioctl(int fd, unsigned long req, uint64_t arg)
+{
+    struct file *f = getf(fd);
+    if (!f)
+        return -EBADF;
+    return f->ino->ops->ioctl ? f->ino->ops->ioctl(f->ino, req, arg) : -ENOTTY;
+}
+
+// readv/writev: one read/write per buffer; stop at the first short transfer.
+long sys_rwv(int fd, uint64_t uiov, int cnt, int write)
+{
+    if (cnt < 0 || cnt > 1024 || !vm_check(current_task()->pgd, uiov, (uint64_t)cnt * sizeof(struct iovec), 0))
+        return cnt < 0 || cnt > 1024 ? -EINVAL : -EFAULT;
+    const struct iovec *iov = (const struct iovec *)uiov;
+    long total = 0;
+    for (int i = 0; i < cnt; i++) {
+        if (!iov[i].iov_len)
+            continue;
+        long n = write ? sys_write(fd, iov[i].iov_base, iov[i].iov_len)
+                       : sys_read(fd, iov[i].iov_base, iov[i].iov_len);
+        if (n < 0)
+            return total ? total : n;
+        total += n;
+        if ((uint64_t)n < iov[i].iov_len)
+            break;
+    }
+    return total;
+}
+
+// ppoll(fds, n, timeout, sigmask): readiness is rechecked every timer tick.
+// shortcut: 10 ms polling instead of wait queues; sigmask is ignored.
+long sys_ppoll(uint64_t ufds, uint64_t n, uint64_t uts)
+{
+    struct task *t = current_task();
+    if (n > NFD * 4 || !vm_check(t->pgd, ufds, n * sizeof(struct pollfd), 1))
+        return n > NFD * 4 ? -EINVAL : -EFAULT;
+    int64_t limit = -1;                     // ticks; -1 = forever
+    if (uts) {
+        if (!vm_check(t->pgd, uts, sizeof(struct timespec), 0))
+            return -EFAULT;
+        const struct timespec *ts = (const struct timespec *)uts;
+        limit = ts->tv_sec * HZ + (ts->tv_nsec + 1000000000 / HZ - 1) / (1000000000 / HZ);
+    }
+    uint64_t start = timer_ticks();
+    struct pollfd *pf = (struct pollfd *)ufds;
+    for (;;) {
+        long ready = 0;
+        for (uint64_t i = 0; i < n; i++) {
+            pf[i].revents = 0;
+            if (pf[i].fd < 0)
+                continue;
+            struct file *f = getf(pf[i].fd);
+            int r = !f ? POLLNVAL : f->ino->ops->poll ? f->ino->ops->poll(f->ino) : POLLIN | POLLOUT;
+            pf[i].revents = (int16_t)(r & (pf[i].events | POLLERR | POLLHUP | POLLNVAL));
+            ready += pf[i].revents != 0;
+        }
+        if (ready || (limit >= 0 && (int64_t)(timer_ticks() - start) >= limit))
+            return ready;
+        if (tick_wait())
+            return -EINTR;
+    }
+}
+
+static long symlink(uint64_t utarget, uint64_t upath)
+{
+    char target[PATH_MAX], path[PATH_MAX];
+    long r = get_path(target, utarget);
+    if (r < 0 || (r = get_path(path, upath)) < 0)
+        return r;
+    if (!*target)
+        return -ENOENT;
+    struct inode *ino;
+    if (vfs_lookup_nofollow(path, &ino) == 0) {
+        iput(ino);
+        return -EEXIST;
+    }
+    if ((r = vfs_create(path, S_IFLNK | 0777, &ino)) < 0)
+        return r;
+    size_t n = strlen(target);
+    if (!S_ISLNK(ino->mode) || ino->ops->write(ino, target, n, 0) != (long)n) {
+        iput(ino);              // filesystem without symlinks (FAT): undo
+        sys_unlink(upath);
+        return -EPERM;
+    }
+    iput(ino);
+    return 0;
+}
+
+long sys_symlinkat(uint64_t utarget, int dirfd, uint64_t upath)
+{
+    return AT_CALL(dirfd, symlink(utarget, upath));
+}
+
+static long readlink(uint64_t upath, uint64_t ubuf, uint64_t size)
+{
+    char path[PATH_MAX];
+    struct inode *ino;
+    long r = get_path(path, upath);
+    if (r < 0 || (r = vfs_lookup_nofollow(path, &ino)) < 0)
+        return r;
+    if (!S_ISLNK(ino->mode))
+        r = -EINVAL;
+    else if (!vm_check(current_task()->pgd, ubuf, size, 1))
+        r = -EFAULT;
+    else
+        r = ino->ops->read(ino, (char *)ubuf, size < ino->size ? size : ino->size, 0);
+    iput(ino);
+    return r;
+}
+
+long sys_readlinkat(int dirfd, uint64_t upath, uint64_t ubuf, uint64_t size)
+{
+    return AT_CALL(dirfd, readlink(upath, ubuf, size));
 }

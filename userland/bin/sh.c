@@ -1,6 +1,6 @@
 // Minimal shell: pipelines, < > >> redirection, '' "" \ quoting, cd/exit builtins.
 // On the console: line editing (arrows, Home/End, Delete) and up/down history.
-// Commands without '/' are run from /bin, then /boot/bin (SD card). Each
+// Commands without '/' are searched in $PATH (default /bin:/boot/bin). Each
 // pipeline gets its own process group and owns the console's ^C while it runs.
 #include "ulib.h"
 
@@ -47,8 +47,8 @@ static int tokenize(char **toks, int max)
                 if (*s == '\'' || *s == '"') {
                     char q = *s++;
                     while (*s && *s != q) {
-                        if (q == '"' && *s == '\\' && (s[1] == '"' || s[1] == '\\'))
-                            s++;        // \" and \\ inside double quotes
+                        if (q == '"' && *s == '\\' && s[1] && strchr("\"\\$`", s[1]))
+                            s++;        // \" \\ \$ \` inside double quotes (POSIX)
                         *w++ = *s++;
                     }
                     if (!*s)
@@ -125,15 +125,25 @@ static _Noreturn void child(struct cmd *c, char **envp)
     int r = -ENOENT;
     if (slash) {
         r = execve(name, c->argv, envp);
-    } else if (strlen(name) < PATH_MAX - 16) {
-        // /bin = built-in programs (RAM); /boot/bin = installed on the SD card.
-        static const char *const dirs[] = { "/bin/", "/boot/bin/" };
-        for (int i = 0; i < 2 && r == -ENOENT; i++) {
+    } else {
+        // $PATH, e.g. /bin (built-in programs, RAM), /usr/bin (BusyBox applets),
+        // /boot/bin (installed on the SD card).
+        const char *dirs = "/bin:/boot/bin";
+        for (char **e = envp; e && *e; e++)
+            if (strncmp(*e, "PATH=", 5) == 0)
+                dirs = *e + 5;
+        size_t nl = strlen(name);
+        while (*dirs && (r == -ENOENT || r == -ENOTDIR)) {
+            const char *end = strchr(dirs, ':');
+            size_t dl = end ? (size_t)(end - dirs) : strlen(dirs);
             char path[PATH_MAX];
-            size_t dl = strlen(dirs[i]);
-            memcpy(path, dirs[i], dl);
-            memcpy(path + dl, name, strlen(name) + 1);
-            r = execve(path, c->argv, envp);
+            if (dl + 1 + nl < sizeof path) {
+                memcpy(path, dirs, dl);
+                path[dl] = '/';
+                memcpy(path + dl + 1, name, nl + 1);
+                r = execve(path, c->argv, envp);
+            }
+            dirs += dl + (end != NULL);
         }
     }
     err("sh", name, r);

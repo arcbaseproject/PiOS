@@ -7,40 +7,46 @@
     ret
 .endm
 .text
-SYSCALL _exit,   SYS_exit
-SYSCALL fork,    SYS_fork
+// Direct Linux syscalls (same arguments as the C prototypes in ulib.h).
+SYSCALL _exit,   SYS_exit_group
 SYSCALL write,   SYS_write
+SYSCALL read,    SYS_read
 SYSCALL getpid,  SYS_getpid
 SYSCALL execve,  SYS_execve
-SYSCALL waitpid, SYS_waitpid
-SYSCALL read,    SYS_read
-SYSCALL open,    SYS_open
 SYSCALL close,   SYS_close
 SYSCALL lseek,   SYS_lseek
-SYSCALL stat,    SYS_stat
 SYSCALL fstat,   SYS_fstat
 SYSCALL dup,     SYS_dup
-SYSCALL dup2,    SYS_dup2
-SYSCALL pipe,    SYS_pipe
 SYSCALL chdir,   SYS_chdir
 SYSCALL getcwd,  SYS_getcwd
-SYSCALL mkdir,   SYS_mkdir
-SYSCALL unlink,  SYS_unlink
-SYSCALL rmdir,   SYS_rmdir
-SYSCALL rename,  SYS_rename
-SYSCALL getdents, SYS_getdents
+SYSCALL getdents64, SYS_getdents64
 SYSCALL kill,    SYS_kill
 SYSCALL setpgid, SYS_setpgid
-SYSCALL tcsetpgrp, SYS_tcsetpgrp
-SYSCALL ttymode, SYS_ttymode
-SYSCALL sigaction, SYS_sigaction
-
-// Signal handlers return here (lr); sp points at the kernel's sigframe.
-.global __sigtramp
-__sigtramp:
-    mov     x8, #SYS_sigreturn
-    svc     #0
 SYSCALL getprocs, SYS_getprocs
 SYSCALL brk,     SYS_brk
 SYSCALL nanosleep, SYS_nanosleep
 SYSCALL clock_gettime, SYS_clock_gettime
+SYSCALL ioctl,   SYS_ioctl
+SYSCALL mmap,    SYS_mmap
+SYSCALL munmap,  SYS_munmap
+SYSCALL uname,   SYS_uname
+// Raw forms behind C wrappers in ulib.c.
+SYSCALL __clone, SYS_clone
+SYSCALL __wait4, SYS_wait4
+SYSCALL __openat, SYS_openat
+SYSCALL __fstatat, SYS_newfstatat
+SYSCALL __dup3,  SYS_dup3
+SYSCALL __fcntl, SYS_fcntl
+SYSCALL __pipe2, SYS_pipe2
+SYSCALL __mkdirat, SYS_mkdirat
+SYSCALL __unlinkat, SYS_unlinkat
+SYSCALL __renameat, SYS_renameat
+SYSCALL __rt_sigaction, SYS_rt_sigaction
+SYSCALL __symlinkat, SYS_symlinkat
+SYSCALL __readlinkat, SYS_readlinkat
+
+// Signal handlers return here (lr); sp points at the kernel's sigframe.
+.global __sigtramp
+__sigtramp:
+    mov     x8, #SYS_rt_sigreturn
+    svc     #0

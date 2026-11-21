@@ -4,6 +4,7 @@
 void timer_init(void);
 void timer_irq(void);
 uint64_t timer_ticks(void);
+int tick_wait(void);                 // sleep until the next tick; -EINTR on a signal (IRQs masked)
 void msleep(unsigned ms);           // kernel threads: sleep at least ms (10 ms granularity)
 void udelay(unsigned us);           // busy-wait on the counter
 long sys_nanosleep(uint64_t ureq);

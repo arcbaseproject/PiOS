@@ -1,5 +1,6 @@
 // Device nodes in /dev: console (UART, cooked line input) and null.
 #include "kernel.h"
+#include "mm.h"
 #include "proc.h"
 #include "sched.h"
 #include "uart.h"
@@ -19,23 +20,55 @@ static size_t ready_head, ready_count;
 static int eof_pending;
 static int console_chan;    // sleep channel
 static int fg_pgid;         // ^C target group; 0 = none
-static int raw;             // TTY_RAW: bytes pass straight to read(), no echo
+static int raw;             // !ICANON: bytes pass straight to read(), no echo
 
-long sys_ttymode(int mode)
+// Terminal ioctls. Only ICANON matters: without it the console is raw (every
+// byte, ^C included, goes to read() unechoed), like cfmakeraw.
+static long console_ioctl(struct inode *ino, unsigned long req, uint64_t uarg)
 {
-    if (mode != TTY_COOKED && mode != TTY_RAW)
-        return -EINVAL;
-    raw = mode == TTY_RAW;
-    line_len = 0;
-    return 0;
-}
-
-long sys_tcsetpgrp(int pgid)
-{
-    if (pgid < 0)
-        return -EINVAL;
-    fg_pgid = pgid;
-    return 0;
+    (void)ino;
+    struct task *t = current_task();
+    switch (req) {
+    case TCGETS: {
+        if (!vm_check(t->pgd, uarg, sizeof(struct ktermios), 1))
+            return -EFAULT;
+        struct ktermios *k = (struct ktermios *)uarg;
+        memset(k, 0, sizeof *k);
+        k->c_iflag = 0x100;                         // ICRNL
+        k->c_oflag = 0x5;                           // OPOST | ONLCR
+        k->c_cflag = 0x10b2;                        // B115200 | CS8 | CREAD
+        k->c_lflag = raw ? 0 : ISIG | ICANON | ECHO | 0x10 | 0x20;   // + ECHOE ECHOK
+        k->c_cc[0] = 3, k->c_cc[2] = 0x7f, k->c_cc[4] = 4, k->c_cc[6] = 1;  // VINTR VERASE VEOF VMIN
+        return 0;
+    }
+    case TCSETS: case TCSETSW: case TCSETSF: {
+        if (!vm_check(t->pgd, uarg, sizeof(struct ktermios), 0))
+            return -EFAULT;
+        raw = !(((struct ktermios *)uarg)->c_lflag & ICANON);
+        line_len = 0;
+        return 0;
+    }
+    case TIOCGPGRP:
+        if (!vm_check(t->pgd, uarg, sizeof(int), 1))
+            return -EFAULT;
+        *(int *)uarg = fg_pgid ? fg_pgid : t->pgid;
+        return 0;
+    case TIOCSPGRP:
+        if (!vm_check(t->pgd, uarg, sizeof(int), 0))
+            return -EFAULT;
+        if (*(int *)uarg < 0)
+            return -EINVAL;
+        fg_pgid = *(int *)uarg;
+        return 0;
+    case TIOCGWINSZ: {
+        if (!vm_check(t->pgd, uarg, sizeof(struct winsize), 1))
+            return -EFAULT;
+        // shortcut: fixed 24x80 (a serial terminal cannot be asked cheaply)
+        *(struct winsize *)uarg = (struct winsize){ 24, 80, 0, 0 };
+        return 0;
+    }
+    }
+    return -ENOTTY;
 }
 
 static void ready_push(const char *s, size_t n)
@@ -111,7 +144,14 @@ static long console_write(struct inode *ino, const char *buf, size_t len, uint64
     return (long)len;
 }
 
-static const struct inode_ops console_ops = { .read = console_read, .write = console_write };
+static int console_poll(struct inode *ino)
+{
+    (void)ino;
+    return (ready_count || eof_pending ? POLLIN : 0) | POLLOUT;
+}
+
+static const struct inode_ops console_ops = { .read = console_read, .write = console_write,
+                                              .ioctl = console_ioctl, .poll = console_poll };
 
 // ---- null ----
 

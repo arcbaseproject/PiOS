@@ -9,8 +9,9 @@
 #define P2V(pa) ((void *)((uintptr_t)(pa) + KERNEL_VA))
 #define V2P(va) ((uintptr_t)(va) - KERNEL_VA)
 
-/* User address space: one L1 slot (1 GiB) per process. */
-#define USER_BASE        0x80000000UL
+/* User address space (TTBR0): programs, heap, mmap area, stack. */
+#define USER_BASE        0x10000UL       /* lowest user mapping (null pages stay unmapped) */
+#define PIOS_BASE        0x80000000UL    /* where PiOS's own programs are linked */
 #define USER_TOP         0xC0000000UL
 #define USER_STACK_PAGES 64    // 256 KiB, mapped eagerly (Lua's parser and VM recurse deeply)
 #define USER_STACK_TOP   USER_TOP
@@ -35,6 +36,7 @@ void vm_free(uint64_t *pgd);
 uint64_t *vm_copy(uint64_t *src);
 uint64_t *vm_walk(uint64_t *pgd, uint64_t va, int alloc);
 void *vm_alloc_page(uint64_t *pgd, uint64_t va, uint64_t flags);
+void vm_unmap(uint64_t *pgd, uint64_t va);
 int vm_check(uint64_t *pgd, uint64_t va, uint64_t len, int write);
 void vm_activate(uint64_t *pgd);
 uint64_t vm_make_pte(uint64_t pa, uint64_t flags);

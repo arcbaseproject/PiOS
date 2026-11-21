@@ -90,6 +90,9 @@
 Goal: run unmodified static Linux/AArch64 binaries (first target: Alpine's
 busybox.static, linked at 0x400000).
 - [x] Kernel in the TTBR1 higher half; user space owns all of TTBR0
-- [ ] Linux ELF loading: stack with argc/argv/envp/auxv, TPIDR_EL0 per task
-- [ ] Linux syscall numbers and semantics for what BusyBox uses
-- [ ] busybox echo / ls / sh run
+- [x] Linux ELF loading: stack with argc/argv/envp/auxv, TPIDR_EL0 per task
+- [x] Linux syscall numbers and semantics for what BusyBox uses (PiOS's own ABI is now Linux's)
+- [x] busybox: ~300 applets incl. ash, vi, awk, sed, find; symlinks in ramfs
+- [x] init test suite: 78/78 pass in QEMU raspi3b
+- [ ] /proc (ps, top, free, /proc/self/exe), sendfile, select, file-backed mmap
+- [ ] Verified on real Pi Zero 2 W

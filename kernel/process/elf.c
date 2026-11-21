@@ -32,7 +32,7 @@ static int rd(struct inode *ino, void *buf, uint64_t len, uint64_t off)
     return ino->ops->read(ino, buf, len, off) == (long)len ? 0 : -ENOEXEC;
 }
 
-int elf_load(uint64_t *pgd, struct inode *ino, uint64_t *entry, uint64_t *top)
+int elf_load(uint64_t *pgd, struct inode *ino, struct elf_info *info)
 {
     struct elf64_ehdr eh;
     struct elf64_phdr phs[MAX_PHDRS];
@@ -45,7 +45,11 @@ int elf_load(uint64_t *pgd, struct inode *ino, uint64_t *entry, uint64_t *top)
         return -ENOEXEC;
     if (eh.entry < USER_BASE || eh.entry >= USER_STACK_BASE)
         return -ENOEXEC;
+    uint64_t *top = &info->top;
     *top = USER_BASE;
+    info->entry = eh.entry;
+    info->phnum = eh.phnum;
+    info->phdr = 0;
 
     for (int i = 0; i < eh.phnum; i++) {
         const struct elf64_phdr *ph = &phs[i];
@@ -56,6 +60,8 @@ int elf_load(uint64_t *pgd, struct inode *ino, uint64_t *entry, uint64_t *top)
             va0 < USER_BASE || end < va0 || end > USER_STACK_BASE)
             return -ENOEXEC;
         uint64_t flags = (ph->flags & PF_W ? 0 : VM_RO) | (ph->flags & PF_X ? 0 : VM_NX);
+        if (eh.phoff >= ph->offset && eh.phoff - ph->offset < ph->filesz)
+            info->phdr = va0 + (eh.phoff - ph->offset);    // for AT_PHDR (musl finds PT_TLS)
         if (end > *top)
             *top = (end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
@@ -81,6 +87,5 @@ int elf_load(uint64_t *pgd, struct inode *ino, uint64_t *entry, uint64_t *top)
         }
     }
     icache_inval_all();
-    *entry = eh.entry;
     return 0;
 }

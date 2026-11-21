@@ -30,14 +30,20 @@ struct task {
     int killed;                 // pending fatal signal, acted on at return to EL0
     uint32_t sigpend, sigmask;  // caught signals pending / blocked (bit = 1 << sig)
     uint64_t sighand[32];       // SIG_DFL, SIG_IGN or user handler address
-    uint64_t sigrestorer;       // user code that calls sigreturn
+    uint64_t sigrestorer;       // user code that calls rt_sigreturn
+    uint32_t sigflags[32];      // sa_flags (SA_SIGINFO honoured)
+    uint32_t sigactmask[32];    // sa_mask, blocked while that handler runs
+    uint64_t tpidr;             // TPIDR_EL0 (user thread pointer), saved while switched out
+    uint64_t mmap_low;          // lowest mmap'd address; mmap grows down from the stack
+    uint32_t umask;
     char name[16];
     void *kstack;               // one page; NULL for idle, and for zombies once switched out
     uint64_t *pgd;              // user page table; NULL = kernel thread
     struct task *parent;        // NULL = nobody waits (kernel threads, orphans)
     int exit_status;            // waitpid status encoding
     void *wchan;                // what a WAITING task sleeps on
-    struct file *fd[16];        // NFD in vfs.h
+    struct file *fd[32];        // NFD in vfs.h
+    uint8_t cloexec[32];        // FD_CLOEXEC per slot
     struct inode *cwd;          // NULL = root (kernel threads)
     uint64_t brk_base, brk, brk_mapped;    // heap: start, current break, mapped top
     struct fpstate fp;          // saved while switched out

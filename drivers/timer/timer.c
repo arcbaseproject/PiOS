@@ -51,7 +51,7 @@ long sys_nanosleep(uint64_t ureq)
 
 long sys_clock_gettime(int clk, uint64_t uts)
 {
-    if (clk != CLOCK_MONOTONIC)
+    if (clk < 0 || clk > 7)     // every clock is time since boot (no RTC; CPU clocks approximated)
         return -EINVAL;
     if (!vm_check(current_task()->pgd, uts, sizeof(struct timespec), 1))
         return -EFAULT;
@@ -80,3 +80,5 @@ void udelay(unsigned us)
     while (read_sysreg(cntpct_el0) < end)
         ;
 }
+
+int tick_wait(void) { return sleep_on((void *)&ticks); }

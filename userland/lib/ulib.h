@@ -27,12 +27,21 @@ int mkdir(const char *path, int mode);
 int unlink(const char *path);
 int rmdir(const char *path);
 int rename(const char *from, const char *to);
-long getdents(int fd, struct dirent *buf, size_t len);
+int symlink(const char *target, const char *path);
+long __pipe2(int fds[2], int flags);
+long readlink(const char *path, char *buf, size_t size);
+long getdents64(int fd, void *buf, size_t len);   /* struct dirent64 records */
 int kill(int pid, int sig);
 int setpgid(int pid, int pgid);
-int tcsetpgrp(int pgid);
-int ttymode(int mode);
-long sigaction(int sig, void *handler, void *restorer);   /* raw; use signal() */
+int tcsetpgrp(int pgid);        /* console ^C target; 0 = none */
+#define TTY_COOKED 0
+#define TTY_RAW    1
+int ttymode(int mode);          /* TTY_RAW clears ICANON (no echo, every byte to read) */
+int ioctl(int fd, unsigned long req, void *arg);
+int fcntl(int fd, int cmd, long arg);
+void *mmap(void *addr, size_t len, int prot, int flags, int fd, long off);   /* -errno cast on failure */
+int munmap(void *addr, size_t len);
+int uname(struct utsname *u);
 typedef void (*sighandler_t)(int);
 sighandler_t signal(int sig, sighandler_t h);   /* h may be (sighandler_t)SIG_DFL / SIG_IGN; returns old or (sighandler_t)-errno */
 int getprocs(struct procinfo *buf, int max);
