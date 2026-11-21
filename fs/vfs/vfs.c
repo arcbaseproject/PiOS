@@ -159,4 +159,5 @@ void vfs_init(void)
     for (const struct initrd_file *f = initrd_table; f->name; f++, n++)
         install(f->name, f->start, (size_t)(f->end - f->start));
     kprintf("[VFS] ramfs root, /dev/console, /dev/null, %d programs installed\n", n);
+    fat_mount_boot();
 }

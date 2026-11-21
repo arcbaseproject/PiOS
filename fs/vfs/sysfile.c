@@ -293,6 +293,8 @@ long sys_rename(uint64_t uold, uint64_t unew)
     struct dirent de;
     if (!strcmp(oname, ".") || !strcmp(oname, "..") || !strcmp(nname, ".") || !strcmp(nname, ".."))
         r = -EINVAL;
+    else if (odir->ops != ndir->ops)
+        r = -EXDEV;         // different filesystems
     else if ((r = odir->ops->lookup(odir, oname, &ino)) == 0) {
         iget(ino);
         // A directory may not move into itself or its own subtree.

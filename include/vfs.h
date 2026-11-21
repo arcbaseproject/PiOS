@@ -53,5 +53,6 @@ void vfs_init(void);
 
 struct inode *ramfs_new_root(void);
 void devfs_init(struct inode *dev);
+void fat_mount_boot(void);      // SD card FAT32 -> /boot, if present
 void console_input(char c);     // from UART RX IRQ
 long sys_pipe(uint64_t ufds);
